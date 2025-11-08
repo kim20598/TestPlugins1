@@ -1,0 +1,9 @@
+{
+    "name": "arab-sites",
+    "iconUrl": "https://pbs.twimg.com/profile_images/1971832953362911232/BzLwLXoV.jpg",
+    "description": "hakim Repository",
+    "manifestVersion": 1,
+    "pluginLists": [
+      "https://raw.githubusercontent.com/kim20598/TestPlugins1/refs/heads/builds/plugins.json"
+    ]
+}
