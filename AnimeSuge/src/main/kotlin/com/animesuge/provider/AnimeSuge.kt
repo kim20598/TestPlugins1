@@ -155,7 +155,7 @@ class AnimeSuge : MainAPI() {
         // Extract episode number from URL
         val episodeNumber = Regex("""/ep-(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 1
 
-        return newAnimeLoadResponse(title, url, TvType.Anime, listOf(Episode(url, episode = episodeNumber))) {
+        return newMovieLoadResponse(title, url, TvType.Anime, url) {
             this.posterUrl = poster
             this.plot = description
         }
@@ -167,7 +167,7 @@ class AnimeSuge : MainAPI() {
         val description = document.selectFirst(".description, .story, .synopsis, .cts-wrapper")?.text()?.trim()
         
         // Extract metadata
-        val status = document.selectFirst(".meta span:contains(Status) a")?.text()?.trim()
+        val statusText = document.selectFirst(".meta span:contains(Status) a")?.text()?.trim()
         val yearText = document.selectFirst(".meta span:contains(Premiered) a")?.text()
         val year = yearText?.substringAfterLast(" ")?.toIntOrNull()
         val genres = document.select(".meta span:contains(Genre) a").map { it.text().trim() }
@@ -184,16 +184,19 @@ class AnimeSuge : MainAPI() {
         // Extract episodes
         val episodes = extractEpisodes(document, url)
 
-        return newAnimeLoadResponse(title, url, type, episodes) {
-            this.posterUrl = poster
-            this.plot = description
-            this.year = year
-            this.tags = genres
-            this.status = when (status?.lowercase()) {
-                "currently airing" -> ShowStatus.Ongoing
-                "finished airing" -> ShowStatus.Completed
-                "not yet aired" -> ShowStatus.ComingSoon
-                else -> null
+        return if (episodes.isNotEmpty()) {
+            newTvSeriesLoadResponse(title, url, type, episodes) {
+                this.posterUrl = poster
+                this.plot = description
+                this.year = year
+                this.tags = genres
+            }
+        } else {
+            newMovieLoadResponse(title, url, type, url) {
+                this.posterUrl = poster
+                this.plot = description
+                this.year = year
+                this.tags = genres
             }
         }
     }
@@ -215,7 +218,10 @@ class AnimeSuge : MainAPI() {
                         val episodeText = episodeLink.text().trim()
                         val episodeNumber = extractEpisodeNumber(episodeUrl, episodeText)
                         
-                        episodes.add(Episode(episodeUrl, name = episodeText, episode = episodeNumber))
+                        episodes.add(newEpisode(episodeUrl) {
+                            this.name = episodeText.ifBlank { "Episode $episodeNumber" }
+                            this.episode = episodeNumber
+                        })
                     }
                 }
             } catch (e: Exception) {
@@ -230,7 +236,10 @@ class AnimeSuge : MainAPI() {
                 val episodeText = episodeLink.text().trim()
                 val episodeNumber = extractEpisodeNumber(episodeUrl, episodeText)
                 
-                episodes.add(Episode(episodeUrl, name = episodeText, episode = episodeNumber))
+                episodes.add(newEpisode(episodeUrl) {
+                    this.name = episodeText.ifBlank { "Episode $episodeNumber" }
+                    this.episode = episodeNumber
+                })
             }
         }
 
