@@ -3,6 +3,7 @@ package com.animesuge.provider
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
@@ -115,11 +116,6 @@ class AnimeSuge : MainAPI() {
                 this.plot = description
                 this.year = year
                 this.tags = genres
-                this.showStatus = when (status?.lowercase()) {
-                    "currently airing" -> ShowStatus.Ongoing
-                    "finished airing" -> ShowStatus.Completed
-                    else -> ShowStatus.Completed
-                }
             }
         } else {
             // This is a series page - extract episodes
@@ -151,11 +147,6 @@ class AnimeSuge : MainAPI() {
                     this.plot = description
                     this.year = year
                     this.tags = genres
-                    this.showStatus = when (status?.lowercase()) {
-                        "currently airing" -> ShowStatus.Ongoing
-                        "finished airing" -> ShowStatus.Completed
-                        else -> ShowStatus.Completed
-                    }
                 }
             } else {
                 newMovieLoadResponse(title, url, TvType.Anime, url) {
@@ -172,7 +163,7 @@ class AnimeSuge : MainAPI() {
         val episodes = mutableListOf<Episode>()
         try {
             // The API returns HTML with episode links
-            val doc = app.parseHtml(apiResponse)
+            val doc = Jsoup.parse(apiResponse)
             doc.select("a[href*='/ep-']").forEach { episodeLink ->
                 val episodeUrl = fixUrl(episodeLink.attr("href"))
                 val episodeText = episodeLink.text().trim()
