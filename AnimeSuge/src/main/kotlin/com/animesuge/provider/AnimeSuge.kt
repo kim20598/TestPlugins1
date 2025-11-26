@@ -3,6 +3,7 @@ package com.animesuge.provider
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
@@ -207,10 +208,10 @@ class AnimeSuge : MainAPI() {
         if (seriesId != null) {
             try {
                 // Fetch episodes via API
-                val episodesResponse = app.get("$mainUrl/api/seasons/$seriesId").parsedSafe<EpisodeResponse>()
-                episodesResponse?.result?.let { htmlContent ->
+                val episodesResponse = app.get("$mainUrl/api/seasons/$seriesId").text
+                if (episodesResponse.isNotBlank() && episodesResponse != "null") {
                     // Parse the HTML content from API response
-                    val doc = app.parse(htmlContent)
+                    val doc = Jsoup.parse(episodesResponse)
                     doc.select("a[href*='/ep-']").forEach { episodeLink ->
                         val episodeUrl = fixUrl(episodeLink.attr("href"))
                         val episodeText = episodeLink.text().trim()
@@ -224,20 +225,30 @@ class AnimeSuge : MainAPI() {
                 }
             } catch (e: Exception) {
                 // Fallback to page extraction
-                document.select("a[href*='/ep-']").forEach { episodeLink ->
-                    val episodeUrl = fixUrl(episodeLink.attr("href"))
-                    val episodeText = episodeLink.text().trim()
-                    val episodeNumber = extractEpisodeNumber(episodeUrl, episodeText)
-                    
-                    episodes.add(newEpisode(episodeUrl) {
-                        this.name = episodeText.ifBlank { "Episode $episodeNumber" }
-                        this.episode = episodeNumber
-                    })
-                }
+                episodes.addAll(extractEpisodesFromPage(document, baseUrl))
             }
+        } else {
+            episodes.addAll(extractEpisodesFromPage(document, baseUrl))
         }
         
         return episodes.distinctBy { it.episode }.sortedBy { it.episode }
+    }
+
+    private fun extractEpisodesFromPage(document: org.jsoup.nodes.Document, baseUrl: String): List<Episode> {
+        val episodes = mutableListOf<Episode>()
+        
+        document.select("a[href*='/ep-']").forEach { episodeLink ->
+            val episodeUrl = fixUrl(episodeLink.attr("href"))
+            val episodeText = episodeLink.text().trim()
+            val episodeNumber = extractEpisodeNumber(episodeUrl, episodeText)
+            
+            episodes.add(newEpisode(episodeUrl) {
+                this.name = episodeText.ifBlank { "Episode $episodeNumber" }
+                this.episode = episodeNumber
+            })
+        }
+        
+        return episodes
     }
 
     private fun extractEpisodeNumber(url: String, text: String): Int {
@@ -346,9 +357,4 @@ class AnimeSuge : MainAPI() {
 
         return urls.distinct()
     }
-
-    data class EpisodeResponse(
-        val status: Int? = null,
-        val result: String? = null
-    )
 }
