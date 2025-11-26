@@ -19,21 +19,21 @@ class AnimeSuge : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl" to "Latest Anime",
-        "$mainUrl/filter?type[]=tv&sort=default" to "TV Series",
-        "$mainUrl/filter?type[]=movie&sort=default" to "Movies",
-        "$mainUrl/filter?type[]=ova&sort=default" to "OVA",
-        "$mainUrl/filter?sort=views" to "Most Viewed"
+        "$mainUrl" to "Recently Updated",
+        "$mainUrl/new-release" to "Recently Added", 
+        "$mainUrl/most-viewed" to "Most Viewed",
+        "$mainUrl/status/finished-airing" to "Completed",
+        "$mainUrl/status/currently-airing" to "Ongoing"
     )
 
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val url = if (page == 1) request.data else "${request.data}&page=$page"
+        val url = if (page > 1) "${request.data}?page=$page" else request.data
         val document = app.get(url).document
 
-        val home = document.select("div.anime").mapNotNull {
+        val home = document.select("div.item, a.item").mapNotNull {
             it.toSearchResult()
         }
 
@@ -44,20 +44,32 @@ class AnimeSuge : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleElement = selectFirst("div.name a")
+        // Handle main page items (div.item)
+        val titleElement = selectFirst(".name a, .detail .name")
         val title = titleElement?.text()?.trim() ?: return null
         
-        val href = fixUrl(titleElement.attr("href"))
-        val posterUrl = fixUrlNull(selectFirst("img")?.attr("src"))
+        val href = when {
+            hasAttr("href") -> attr("href") // For <a.item> elements
+            else -> selectFirst("a")?.attr("href") // For <div.item> elements
+        } ?: return null
+        
+        val fullUrl = fixUrl(href)
+        
+        // Extract poster from various possible locations
+        val posterUrl = fixUrlNull(
+            selectFirst("img.lazyload")?.attr("data-src") ?:
+            selectFirst("img")?.attr("src") ?:
+            selectFirst(".poster img")?.attr("data-src")
+        )
         
         // Determine type from URL or other indicators
         val type = when {
-            href.contains("/movie/") -> TvType.AnimeMovie
-            href.contains("/ova/") -> TvType.OVA
+            fullUrl.contains("/movie/") -> TvType.AnimeMovie
+            fullUrl.contains("/ova/") -> TvType.OVA
             else -> TvType.Anime
         }
 
-        return newAnimeSearchResponse(title, href, type) {
+        return newAnimeSearchResponse(title, fullUrl, type) {
             this.posterUrl = posterUrl
         }
     }
@@ -66,7 +78,7 @@ class AnimeSuge : MainAPI() {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val document = app.get("$mainUrl/filter?keyword=$encodedQuery").document
 
-        return document.select("div.anime").mapNotNull {
+        return document.select("div.item").mapNotNull {
             it.toSearchResult()
         }
     }
@@ -74,41 +86,52 @@ class AnimeSuge : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        // Extract title
-        val title = document.selectFirst("h1.title")?.text()?.trim() ?: return null
+        // Extract title from multiple possible locations
+        val title = document.selectFirst("h1.entry-title, h1.title, h1")?.text()?.trim() ?: return null
         
         // Extract poster
-        val poster = fixUrlNull(document.selectFirst("div.poster img")?.attr("src"))
+        val poster = fixUrlNull(
+            document.selectFirst("img.lazyload")?.attr("data-src") ?:
+            document.selectFirst(".poster img")?.attr("src")
+        )
         
-        // Extract description
-        val description = document.selectFirst("div.story")?.text()?.trim()
+        // Extract description/synopsis
+        val description = document.selectFirst(".story, .synopsis, .description, .plot")?.text()?.trim()
         
-        // Extract year
-        val yearText = document.select("div.meta:contains(Year) span.value").text()
-        val year = yearText.toIntOrNull()
+        // Extract metadata
+        val metaElements = document.select(".meta span, .dub-sub-total span")
+        val subCount = metaElements.find { it.text().contains("sub", true) }?.text()?.filter { it.isDigit() }?.toIntOrNull()
+        val dubCount = metaElements.find { it.text().contains("dub", true) }?.text()?.filter { it.isDigit() }?.toIntOrNull()
         
-        // Extract status
-        val statusText = document.select("div.meta:contains(Status) span.value").text().lowercase()
-        val status = when {
-            statusText.contains("completed") -> ShowStatus.Completed
-            statusText.contains("ongoing") -> ShowStatus.Ongoing
-            else -> ShowStatus.Completed
+        // Extract episodes - look for episode links
+        val episodes = mutableListOf<Episode>()
+        
+        // Method 1: Look for episode links in the main content
+        document.select("a[href*='/watch/']").forEach { episodeLink ->
+            val episodeUrl = fixUrl(episodeLink.attr("href"))
+            if (episodeUrl.contains("/ep-")) {
+                val episodeText = episodeLink.text().trim()
+                
+                // Extract episode number from URL pattern /ep-XXX
+                val episodeNumber = Regex("""/ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull() ?:
+                                  Regex("""\b(\d+)\b""").find(episodeText)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                
+                episodes.add(newEpisode(episodeUrl) {
+                    this.name = episodeText.ifBlank { "Episode $episodeNumber" }
+                    this.episode = episodeNumber
+                })
+            }
         }
 
-        // Extract genres
-        val genres = document.select("div.genres a").map { it.text().trim() }
-        
-        // Extract episodes
-        val episodes = document.select("div.episodes a").mapNotNull { episode ->
-            val episodeUrl = fixUrl(episode.attr("href"))
-            val episodeTitle = episode.select("span.name").text().trim()
-            val episodeNumber = episode.attr("data-number").toIntOrNull() ?: 0
-            
-            newEpisode(episodeUrl) {
-                this.name = episodeTitle.ifBlank { "Episode $episodeNumber" }
+        // Method 2: If no episodes found, check if this is a direct watch page
+        if (episodes.isEmpty() && url.contains("/watch/")) {
+            // This is already an episode page, add it as a single episode
+            val episodeNumber = Regex("""/ep-(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+            episodes.add(newEpisode(url) {
+                this.name = "Episode $episodeNumber"
                 this.episode = episodeNumber
-            }
-        }.reversed()
+            })
+        }
 
         // Determine type
         val type = when {
@@ -117,23 +140,17 @@ class AnimeSuge : MainAPI() {
             else -> TvType.Anime
         }
 
-        return if (episodes.isEmpty()) {
-            // Movie
+        return if (episodes.isEmpty() || episodes.size == 1) {
+            // Movie or single episode
             newMovieLoadResponse(title, url, type, url) {
                 this.posterUrl = poster
                 this.plot = description
-                this.year = year
-                this.showStatus = status
-                this.tags = genres
             }
         } else {
-            // TV Series
-            newTvSeriesLoadResponse(title, url, type, episodes) {
+            // TV Series with episodes
+            newTvSeriesLoadResponse(title, url, type, episodes.distinctBy { it.episode }.sortedBy { it.episode }) {
                 this.posterUrl = poster
                 this.plot = description
-                this.year = year
-                this.showStatus = status
-                this.tags = genres
             }
         }
     }
@@ -148,22 +165,29 @@ class AnimeSuge : MainAPI() {
         
         var foundLinks = false
 
-        // Method 1: Direct server links with data-id
-        document.select("div.server[data-id]").forEach { server ->
-            val serverId = server.attr("data-id")
+        // Method 1: Look for MegaPlay iframe embeds (primary method)
+        document.select("iframe[src*='megaplay.buzz']").forEach { iframe ->
+            val iframeSrc = iframe.attr("src")
+            if (iframeSrc.isNotBlank()) {
+                foundLinks = true
+                // MegaPlay extractor should handle this URL
+                loadExtractor(fixUrl(iframeSrc), data, subtitleCallback, callback)
+            }
+        }
+
+        // Method 2: Look for server buttons with data attributes
+        document.select("button[data-id], div[data-id]").forEach { element ->
+            val serverId = element.attr("data-id")
             if (serverId.isNotBlank()) {
                 try {
                     val loadUrl = "$mainUrl/ajax/server/$serverId"
                     val response = app.get(loadUrl, referer = data).text
                     
-                    // Extract iframe src from response
-                    val iframeMatch = Regex("""<iframe[^>]*src="([^"]+)""").find(response)
-                    val iframeSrc = iframeMatch?.groupValues?.get(1)
-                    
-                    iframeSrc?.let { src ->
-                        val fixedSrc = if (src.startsWith("//")) "https:$src" else src
+                    // Extract MegaPlay URLs from AJAX response
+                    val megaplayUrl = extractMegaPlayUrl(response)
+                    if (megaplayUrl.isNotBlank()) {
                         foundLinks = true
-                        loadExtractor(fixedSrc, data, subtitleCallback, callback)
+                        loadExtractor(megaplayUrl, data, subtitleCallback, callback)
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
@@ -171,26 +195,35 @@ class AnimeSuge : MainAPI() {
             }
         }
 
-        // Method 2: Direct video links in the page
+        // Method 3: Look for direct video players
         if (!foundLinks) {
-            document.select("source[src]").forEach { source ->
-                val videoUrl = source.attr("src")
-                if (videoUrl.isNotBlank()) {
-                    foundLinks = true
-                    callback(
-                        newExtractorLink(
-                            name,
-                            name,
-                            videoUrl,
-                            "",
-                            getQualityFromName(source.attr("label")),
-                            false
-                        )
-                    )
+            document.select("div#player, div.video-player").forEach { player ->
+                player.select("iframe[src]").forEach { iframe ->
+                    val iframeSrc = iframe.attr("src")
+                    if (iframeSrc.isNotBlank() && iframeSrc.contains("megaplay")) {
+                        foundLinks = true
+                        loadExtractor(fixUrl(iframeSrc), data, subtitleCallback, callback)
+                    }
                 }
             }
         }
 
         return foundLinks
+    }
+
+    private fun extractMegaPlayUrl(html: String): String {
+        // Look for MegaPlay iframe in the response
+        val iframeMatch = Regex("""<iframe[^>]*src="([^"]*megaplay[^"]*)""").find(html)
+        iframeMatch?.let {
+            return it.groupValues[1]
+        }
+        
+        // Look for MegaPlay URL patterns
+        val urlMatch = Regex("""(https?://[^\s"']*megaplay[^\s"']*)""").find(html)
+        urlMatch?.let {
+            return it.value
+        }
+        
+        return ""
     }
 }
