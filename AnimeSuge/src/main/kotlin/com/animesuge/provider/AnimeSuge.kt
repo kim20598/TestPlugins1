@@ -170,7 +170,7 @@ class AnimeSuge : MainAPI() {
         val typeText = document.select(".meta div:contains(Type) span, .meta span:contains(Type) + span").firstOrNull()?.text()?.trim() ?: "TV"
         val statusText = document.select(".meta div:contains(Status) span, .meta span:contains(Status) + span").firstOrNull()?.text()?.trim()
         val yearText = document.select(".meta div:contains(Premiered) span, .meta span:contains(Premiered) + span").firstOrNull()?.text()
-        val rating = document.select(".meta div:contains(MAL) span, .meta span:contains(MAL) + span").firstOrNull()?.text()?.toFloatOrNull()
+        val score = document.select(".meta div:contains(MAL) span, .meta span:contains(MAL) + span").firstOrNull()?.text()?.toFloatOrNull()
         val totalEpisodes = document.select(".meta div:contains(Episodes) span, .meta span:contains(Episodes) + span").firstOrNull()?.text()?.toIntOrNull()
         
         // Extract genres
@@ -192,7 +192,7 @@ class AnimeSuge : MainAPI() {
                 this.posterUrl = poster
                 this.plot = plot
                 this.year = extractYearFromPremiered(yearText)
-                this.rating = rating
+                this.score = score
                 this.tags = genres
             }
         } else {
@@ -200,7 +200,7 @@ class AnimeSuge : MainAPI() {
                 this.posterUrl = poster
                 this.plot = plot
                 this.year = extractYearFromPremiered(yearText)
-                this.rating = rating
+                this.score = score
                 this.tags = genres
             }
         }
