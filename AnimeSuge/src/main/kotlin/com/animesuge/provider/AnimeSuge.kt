@@ -83,7 +83,7 @@ class AnimeSuge : MainAPI() {
         val url = if (page > 1) "${request.data}?page=$page" else request.data
         val document = app.get(url).document
 
-        val home = document.select(".item, .anime-poster").mapNotNull {
+        val home = document.select("div.item, a.item").mapNotNull {
             it.toSearchResult()
         }
 
@@ -94,25 +94,26 @@ class AnimeSuge : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleElement = selectFirst(".name a, .detail .name, p.name a")
-        val title = titleElement?.text()?.trim() ?: return null
+        val title = selectFirst(".name, p.name")?.text()?.trim() ?: return null
         
-        val href = titleElement?.attr("href") ?: selectFirst("a")?.attr("href") ?: return null
+        val href = when {
+            hasAttr("href") -> attr("href")
+            else -> selectFirst("a")?.attr("href")
+        } ?: return null
+        
         val fullUrl = fixUrl(href)
         
         val posterUrl = fixUrlNull(
             selectFirst("img")?.attr("src") ?:
-            selectFirst("img")?.attr("data-src") ?:
-            selectFirst(".poster img")?.attr("src")
+            selectFirst("img")?.attr("data-src")
         )
         
-        // Determine type from type badge
-        val typeText = selectFirst(".type, .item-status .type")?.text()?.trim()?.lowercase() ?: ""
+        // Determine type from URL or class
         val type = when {
-            typeText.contains("movie") -> TvType.AnimeMovie
-            typeText.contains("ova") -> TvType.OVA
-            typeText.contains("ona") -> TvType.OVA
-            typeText.contains("special") -> TvType.OVA
+            fullUrl.contains("/movie/") -> TvType.AnimeMovie
+            fullUrl.contains("/ova/") -> TvType.OVA
+            fullUrl.contains("/ona/") -> TvType.OVA
+            fullUrl.contains("/special/") -> TvType.OVA
             else -> TvType.Anime
         }
 
@@ -125,7 +126,7 @@ class AnimeSuge : MainAPI() {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val document = app.get("$mainUrl/filter?keyword=$encodedQuery").document
 
-        return document.select(".item").mapNotNull {
+        return document.select("div.item, a.item").mapNotNull {
             it.toSearchResult()
         }
     }
@@ -287,12 +288,13 @@ class AnimeSuge : MainAPI() {
                         val serverUrl = "$mainUrl/ajax/server/$serverId"
                         val response = app.get(serverUrl, referer = data).text
                         
-                        // Extract MegaPlay iframe from response
-                        val megaplayUrl = extractMegaPlayUrl(response)
-                        if (megaplayUrl.isNotBlank()) {
-                            foundLinks = true
-                            // Load MegaPlay extractor
-                            loadMegaPlayExtractor(megaplayUrl, data, subtitleCallback, callback)
+                        // Extract video URLs from server response
+                        val videoUrls = extractAllVideoUrls(response)
+                        videoUrls.forEach { videoUrl ->
+                            if (videoUrl.isNotBlank()) {
+                                foundLinks = true
+                                loadExtractor(videoUrl, data, subtitleCallback, callback)
+                            }
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
@@ -301,25 +303,27 @@ class AnimeSuge : MainAPI() {
             }
         }
 
-        // Method 2: Look for direct MegaPlay iframe in page
+        // Method 2: Look for direct video URLs in scripts
         if (!foundLinks) {
-            document.select("iframe[src*='megaplay']").forEach { iframe ->
-                val src = iframe.attr("src")
-                if (src.isNotBlank()) {
-                    foundLinks = true
-                    loadMegaPlayExtractor(fixUrl(src), data, subtitleCallback, callback)
+            document.select("script").forEach { script ->
+                val scriptContent = script.html()
+                val videoUrls = extractAllVideoUrls(scriptContent)
+                videoUrls.forEach { videoUrl ->
+                    if (videoUrl.isNotBlank()) {
+                        foundLinks = true
+                        loadExtractor(videoUrl, data, subtitleCallback, callback)
+                    }
                 }
             }
         }
 
-        // Method 3: Look for MegaPlay URLs in scripts
+        // Method 3: Look for iframe sources
         if (!foundLinks) {
-            document.select("script").forEach { script ->
-                val scriptContent = script.html()
-                val megaplayUrl = extractMegaPlayUrl(scriptContent)
-                if (megaplayUrl.isNotBlank()) {
+            document.select("iframe").forEach { iframe ->
+                val src = iframe.attr("src")
+                if (src.isNotBlank()) {
                     foundLinks = true
-                    loadMegaPlayExtractor(megaplayUrl, data, subtitleCallback, callback)
+                    loadExtractor(fixUrl(src), data, subtitleCallback, callback)
                 }
             }
         }
@@ -327,113 +331,30 @@ class AnimeSuge : MainAPI() {
         return foundLinks
     }
 
-    private fun extractMegaPlayUrl(html: String): String {
-        // Look for MegaPlay iframe
-        Regex("""<iframe[^>]*src="([^"]*megaplay[^"]*)""", RegexOption.IGNORE_CASE).find(html)?.let {
-            return it.groupValues[1]
-        }
-        
-        // Look for direct MegaPlay URLs
-        Regex("""(https?://[^\s"']*megaplay[^\s"']*)""", RegexOption.IGNORE_CASE).find(html)?.let {
-            return it.value
-        }
-        
-        // Look for base64 encoded URLs in stream path
-        Regex("""stream/s-1/([^"']+)""").find(html)?.let {
-            val encoded = it.groupValues[1]
-            return "https://megaplay.buzz/stream/s-1/$encoded"
-        }
-        
-        return ""
-    }
+    private fun extractAllVideoUrls(html: String): List<String> {
+        val urls = mutableListOf<String>()
 
-    private suspend fun loadMegaPlayExtractor(
-        url: String,
-        referer: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            // Try to extract direct video from MegaPlay
-            val document = app.get(url, referer = referer).document
-            
-            // Look for video sources in MegaPlay page
-            document.select("video source").forEach { source ->
-                val videoUrl = source.attr("src")
-                if (videoUrl.isNotBlank() && (videoUrl.contains(".mp4") || videoUrl.contains(".m3u8"))) {
-                    callback.invoke(
-                        newExtractorLink(
-                            name,
-                            "MegaPlay - Direct",
-                            videoUrl,
-                            referer
-                        ) {
-                            this.quality = Qualities.Unknown.value
-                            this.isM3u8 = videoUrl.contains(".m3u8")
-                        }
-                    )
-                }
-            }
-            
-            // Look for HLS streams
-            document.select("script").forEach { script ->
-                val scriptContent = script.html()
-                Regex("""(https?://[^\s"']*\.m3u8[^\s"']*)""").findAll(scriptContent).forEach { match ->
-                    callback.invoke(
-                        newExtractorLink(
-                            name,
-                            "MegaPlay - HLS",
-                            match.value,
-                            referer
-                        ) {
-                            this.quality = Qualities.Unknown.value
-                            this.isM3u8 = true
-                        }
-                    )
-                }
-                
-                Regex("""(https?://[^\s"']*\.mp4[^\s"']*)""").findAll(scriptContent).forEach { match ->
-                    callback.invoke(
-                        newExtractorLink(
-                            name,
-                            "MegaPlay - MP4",
-                            match.value,
-                            referer
-                        ) {
-                            this.quality = Qualities.Unknown.value
-                            this.isM3u8 = false
-                        }
-                    )
-                }
-            }
-            
-            // If no direct links found, use the MegaPlay URL directly
-            if (url.contains("megaplay")) {
-                callback.invoke(
-                    newExtractorLink(
-                        name,
-                        "MegaPlay",
-                        url,
-                        referer
-                    ) {
-                        this.quality = Qualities.Unknown.value
-                        this.isM3u8 = false
-                    }
-                )
-            }
-        } catch (e: Exception) {
-            // Fallback: use the URL directly
-            callback.invoke(
-                newExtractorLink(
-                    name,
-                    "MegaPlay",
-                    url,
-                    referer
-                ) {
-                    this.quality = Qualities.Unknown.value
-                    this.isM3u8 = false
-                }
-            )
+        // Look for MegaPlay iframe
+        Regex("""<iframe[^>]*src="([^"]*megaplay[^"]*)""", RegexOption.IGNORE_CASE).findAll(html).forEach {
+            urls.add(it.groupValues[1])
         }
+        
+        // Look for direct video URLs
+        Regex("""(https?://[^\s"']*megaplay[^\s"']*)""", RegexOption.IGNORE_CASE).findAll(html).forEach {
+            urls.add(it.value)
+        }
+        
+        // Look for base64 encoded URLs
+        Regex("""stream/s-1/([^"']+)""").findAll(html).forEach {
+            val encoded = it.groupValues[1]
+            urls.add("https://megaplay.buzz/stream/s-1/$encoded")
+        }
+        
+        // Look for generic video URLs
+        Regex("""(https?://[^\s"']*\.(mp4|m3u8|mkv|avi)[^\s"']*)""", RegexOption.IGNORE_CASE).findAll(html).forEach {
+            urls.add(it.value)
+        }
+
+        return urls.distinct()
     }
 }
