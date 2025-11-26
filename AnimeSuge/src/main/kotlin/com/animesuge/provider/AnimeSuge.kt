@@ -83,7 +83,7 @@ class AnimeSuge : MainAPI() {
         val url = if (page > 1) "${request.data}?page=$page" else request.data
         val document = app.get(url).document
 
-        val home = document.select("div.item, a.item").mapNotNull {
+        val home = document.select(".item, .anime-poster").mapNotNull {
             it.toSearchResult()
         }
 
@@ -94,26 +94,25 @@ class AnimeSuge : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = selectFirst(".name, p.name")?.text()?.trim() ?: return null
+        val titleElement = selectFirst(".name a, .detail .name, p.name a")
+        val title = titleElement?.text()?.trim() ?: return null
         
-        val href = when {
-            hasAttr("href") -> attr("href")
-            else -> selectFirst("a")?.attr("href")
-        } ?: return null
-        
+        val href = titleElement?.attr("href") ?: selectFirst("a")?.attr("href") ?: return null
         val fullUrl = fixUrl(href)
         
         val posterUrl = fixUrlNull(
             selectFirst("img")?.attr("src") ?:
-            selectFirst("img")?.attr("data-src")
+            selectFirst("img")?.attr("data-src") ?:
+            selectFirst(".poster img")?.attr("src")
         )
         
-        // Determine type from URL or class
+        // Determine type from type badge
+        val typeText = selectFirst(".type, .item-status .type")?.text()?.trim()?.lowercase() ?: ""
         val type = when {
-            fullUrl.contains("/movie/") -> TvType.AnimeMovie
-            fullUrl.contains("/ova/") -> TvType.OVA
-            fullUrl.contains("/ona/") -> TvType.OVA
-            fullUrl.contains("/special/") -> TvType.OVA
+            typeText.contains("movie") -> TvType.AnimeMovie
+            typeText.contains("ova") -> TvType.OVA
+            typeText.contains("ona") -> TvType.OVA
+            typeText.contains("special") -> TvType.OVA
             else -> TvType.Anime
         }
 
@@ -126,7 +125,7 @@ class AnimeSuge : MainAPI() {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val document = app.get("$mainUrl/filter?keyword=$encodedQuery").document
 
-        return document.select("div.item, a.item").mapNotNull {
+        return document.select(".item").mapNotNull {
             it.toSearchResult()
         }
     }
@@ -363,7 +362,7 @@ class AnimeSuge : MainAPI() {
                 val videoUrl = source.attr("src")
                 if (videoUrl.isNotBlank() && (videoUrl.contains(".mp4") || videoUrl.contains(".m3u8"))) {
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             name,
                             "MegaPlay - Direct",
                             videoUrl,
@@ -380,7 +379,7 @@ class AnimeSuge : MainAPI() {
                 val scriptContent = script.html()
                 Regex("""(https?://[^\s"']*\.m3u8[^\s"']*)""").findAll(scriptContent).forEach { match ->
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             name,
                             "MegaPlay - HLS",
                             match.value,
@@ -393,7 +392,7 @@ class AnimeSuge : MainAPI() {
                 
                 Regex("""(https?://[^\s"']*\.mp4[^\s"']*)""").findAll(scriptContent).forEach { match ->
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             name,
                             "MegaPlay - MP4",
                             match.value,
@@ -408,7 +407,7 @@ class AnimeSuge : MainAPI() {
             // If no direct links found, use the MegaPlay URL directly
             if (url.contains("megaplay")) {
                 callback.invoke(
-                    ExtractorLink(
+                    newExtractorLink(
                         name,
                         "MegaPlay",
                         url,
@@ -421,7 +420,7 @@ class AnimeSuge : MainAPI() {
         } catch (e: Exception) {
             // Fallback: use the URL directly
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     name,
                     "MegaPlay",
                     url,
