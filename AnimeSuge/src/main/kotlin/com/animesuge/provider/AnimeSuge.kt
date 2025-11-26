@@ -7,7 +7,6 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
-@Suppress("DEPRECATION")
 class AnimeSuge : MainAPI() {
     override var mainUrl = "https://animesuge.bz"
     override var name = "AnimeSuge"
@@ -348,7 +347,6 @@ class AnimeSuge : MainAPI() {
         return ""
     }
 
-    @Suppress("DEPRECATION")
     private suspend fun loadMegaPlayExtractor(
         url: String,
         referer: String,
@@ -364,14 +362,15 @@ class AnimeSuge : MainAPI() {
                 val videoUrl = source.attr("src")
                 if (videoUrl.isNotBlank() && (videoUrl.contains(".mp4") || videoUrl.contains(".m3u8"))) {
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             name,
                             "MegaPlay - Direct",
                             videoUrl,
-                            referer,
-                            Qualities.Unknown.value,
-                            videoUrl.contains(".m3u8")
-                        )
+                            referer
+                        ) {
+                            this.quality = Qualities.Unknown.value
+                            this.isM3u8 = videoUrl.contains(".m3u8")
+                        }
                     )
                 }
             }
@@ -381,27 +380,29 @@ class AnimeSuge : MainAPI() {
                 val scriptContent = script.html()
                 Regex("""(https?://[^\s"']*\.m3u8[^\s"']*)""").findAll(scriptContent).forEach { match ->
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             name,
                             "MegaPlay - HLS",
                             match.value,
-                            referer,
-                            Qualities.Unknown.value,
-                            true
-                        )
+                            referer
+                        ) {
+                            this.quality = Qualities.Unknown.value
+                            this.isM3u8 = true
+                        }
                     )
                 }
                 
                 Regex("""(https?://[^\s"']*\.mp4[^\s"']*)""").findAll(scriptContent).forEach { match ->
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             name,
                             "MegaPlay - MP4",
                             match.value,
-                            referer,
-                            Qualities.Unknown.value,
-                            false
-                        )
+                            referer
+                        ) {
+                            this.quality = Qualities.Unknown.value
+                            this.isM3u8 = false
+                        }
                     )
                 }
             }
@@ -409,27 +410,29 @@ class AnimeSuge : MainAPI() {
             // If no direct links found, use the MegaPlay URL directly
             if (url.contains("megaplay")) {
                 callback.invoke(
-                    ExtractorLink(
+                    newExtractorLink(
                         name,
                         "MegaPlay",
                         url,
-                        referer,
-                        Qualities.Unknown.value,
-                        false
-                    )
+                        referer
+                    ) {
+                        this.quality = Qualities.Unknown.value
+                        this.isM3u8 = false
+                    }
                 )
             }
         } catch (e: Exception) {
             // Fallback: use the URL directly
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     name,
                     "MegaPlay",
                     url,
-                    referer,
-                    Qualities.Unknown.value,
-                    false
-                )
+                    referer
+                ) {
+                    this.quality = Qualities.Unknown.value
+                    this.isM3u8 = false
+                }
             )
         }
     }
