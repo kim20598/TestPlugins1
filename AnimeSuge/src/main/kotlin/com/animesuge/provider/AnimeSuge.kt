@@ -7,6 +7,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
+@Suppress("DEPRECATION")
 class AnimeSuge : MainAPI() {
     override var mainUrl = "https://animesuge.bz"
     override var name = "AnimeSuge"
@@ -347,6 +348,7 @@ class AnimeSuge : MainAPI() {
         return ""
     }
 
+    @Suppress("DEPRECATION")
     private suspend fun loadMegaPlayExtractor(
         url: String,
         referer: String,
