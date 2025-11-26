@@ -362,15 +362,14 @@ class AnimeSuge : MainAPI() {
                 val videoUrl = source.attr("src")
                 if (videoUrl.isNotBlank() && (videoUrl.contains(".mp4") || videoUrl.contains(".m3u8"))) {
                     callback.invoke(
-                        newExtractorLink(
+                        ExtractorLink(
                             name,
                             "MegaPlay - Direct",
                             videoUrl,
-                            referer
-                        ) {
-                            this.quality = Qualities.Unknown.value
-                            this.isM3u8 = videoUrl.contains(".m3u8")
-                        }
+                            referer,
+                            Qualities.Unknown.value,
+                            videoUrl.contains(".m3u8")
+                        )
                     )
                 }
             }
@@ -380,29 +379,27 @@ class AnimeSuge : MainAPI() {
                 val scriptContent = script.html()
                 Regex("""(https?://[^\s"']*\.m3u8[^\s"']*)""").findAll(scriptContent).forEach { match ->
                     callback.invoke(
-                        newExtractorLink(
+                        ExtractorLink(
                             name,
                             "MegaPlay - HLS",
                             match.value,
-                            referer
-                        ) {
-                            this.quality = Qualities.Unknown.value
-                            this.isM3u8 = true
-                        }
+                            referer,
+                            Qualities.Unknown.value,
+                            true
+                        )
                     )
                 }
                 
                 Regex("""(https?://[^\s"']*\.mp4[^\s"']*)""").findAll(scriptContent).forEach { match ->
                     callback.invoke(
-                        newExtractorLink(
+                        ExtractorLink(
                             name,
                             "MegaPlay - MP4",
                             match.value,
-                            referer
-                        ) {
-                            this.quality = Qualities.Unknown.value
-                            this.isM3u8 = false
-                        }
+                            referer,
+                            Qualities.Unknown.value,
+                            false
+                        )
                     )
                 }
             }
@@ -410,29 +407,27 @@ class AnimeSuge : MainAPI() {
             // If no direct links found, use the MegaPlay URL directly
             if (url.contains("megaplay")) {
                 callback.invoke(
-                    newExtractorLink(
+                    ExtractorLink(
                         name,
                         "MegaPlay",
                         url,
-                        referer
-                    ) {
-                        this.quality = Qualities.Unknown.value
-                        this.isM3u8 = false
-                    }
+                        referer,
+                        Qualities.Unknown.value,
+                        false
+                    )
                 )
             }
         } catch (e: Exception) {
             // Fallback: use the URL directly
             callback.invoke(
-                newExtractorLink(
+                ExtractorLink(
                     name,
                     "MegaPlay",
                     url,
-                    referer
-                ) {
-                    this.quality = Qualities.Unknown.value
-                    this.isM3u8 = false
-                }
+                    referer,
+                    Qualities.Unknown.value,
+                    false
+                )
             )
         }
     }
