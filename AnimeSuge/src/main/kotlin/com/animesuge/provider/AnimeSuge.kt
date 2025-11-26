@@ -10,10 +10,9 @@ import java.net.URLEncoder
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import org.jsoup.nodes.Element
-import kotlin.Pair
 import java.util.Base64
 
-class Animesuge : MainAPI() {
+class AnimeSuge : MainAPI() {
     override var mainUrl = "https://animesuge.bz"
     override var name = "Animesuge"
     override val hasMainPage = true
@@ -97,7 +96,6 @@ class Animesuge : MainAPI() {
             val episodeTitle = episodeElement.attr("title").ifBlank { episodeElement.text().trim() }
             val episodeNumber = episodeElement.attr("data-slug").toIntOrNull() ?: 
                                Regex("""\d+""").find(episodeElement.text())?.value?.toIntOrNull()
-            val episodeId = episodeElement.attr("data-id")
             
             newEpisode(episodeUrl) {
                 name = episodeTitle
@@ -119,15 +117,12 @@ class Animesuge : MainAPI() {
         val type = doc.select(".meta div:contains(Type) span").firstOrNull()?.text()?.trim()
         val status = doc.select(".meta div:contains(Status) span").firstOrNull()?.text()?.trim()
         val premiered = doc.select(".meta div:contains(Premiered) span").firstOrNull()?.text()?.trim()
-        val rating = doc.select(".meta div:contains(MAL) span").firstOrNull()?.text()?.toFloatOrNull()
+        val score = doc.select(".meta div:contains(MAL) span").firstOrNull()?.text()?.toFloatOrNull()
         val totalEpisodes = doc.select(".meta div:contains(Episodes) span").firstOrNull()?.text()?.toIntOrNull()
         val duration = doc.select(".meta div:contains(Duration) span").firstOrNull()?.text()?.trim()
         
         // Extract genres
         val genres = doc.select(".meta div:contains(Genre) a").map { it.text().trim() }
-        
-        // Extract studios
-        val studios = doc.select(".meta div:contains(Studios) a").map { it.text().trim() }
         
         // Determine content type
         val animeType = when {
@@ -152,9 +147,8 @@ class Animesuge : MainAPI() {
             this.backgroundPosterUrl = poster
             this.plot = plot
             this.year = year
-            this.rating = rating
+            this.score = score
             this.tags = genres
-            this.studios = studios
             
             // Add recommendations from side panel
             this.recommendations = doc.select(".side-panel .anime.mini-card .item").mapNotNull { recItem ->
@@ -198,7 +192,6 @@ class Animesuge : MainAPI() {
             
             // Step 4: Look for direct video sources in the page
             val videoScripts = episodeDoc.select("script").map { it.html() }
-            val videoSources = mutableListOf<ExtractorLink>()
             
             // Pattern 1: Look for direct video URLs in scripts
             val videoUrlPatterns = listOf(
@@ -213,16 +206,15 @@ class Animesuge : MainAPI() {
                     for (match in matches) {
                         val videoUrl = match.groupValues[1]
                         if (videoUrl.contains(".mp4") || videoUrl.contains(".m3u8") || videoUrl.contains(".webm")) {
-                            videoSources.add(
+                            callback(
                                 newExtractorLink(
                                     source = this.name,
                                     name = "Direct Video",
-                                    url = videoUrl,
-                                    referer = episodeUrl
+                                    url = videoUrl
                                 ) {
                                     this.quality = Qualities.Unknown.value
                                     this.type = when {
-                                        videoUrl.contains(".m3u8") -> ExtractorLinkType.HLS
+                                        videoUrl.contains(".m3u8") -> ExtractorLinkType.M3U8
                                         else -> ExtractorLinkType.VIDEO
                                     }
                                 }
@@ -238,7 +230,7 @@ class Animesuge : MainAPI() {
                 val iframeSrc = iframe.attr("abs:src")
                 if (iframeSrc.isNotBlank()) {
                     // Load extractor for iframe sources
-                    loadExtractor(iframeSrc, episodeUrl, subtitleCallback, callback)
+                    loadExtractor(iframeSrc, subtitleCallback, callback)
                 }
             }
             
@@ -253,8 +245,7 @@ class Animesuge : MainAPI() {
                         newExtractorLink(
                             source = this.name,
                             name = "Video Source",
-                            url = src,
-                            referer = episodeUrl
+                            url = src
                         ) {
                             this.quality = getQualityFromName(quality)
                             this.type = ExtractorLinkType.VIDEO
@@ -287,12 +278,11 @@ class Animesuge : MainAPI() {
                                     newExtractorLink(
                                         source = this.name,
                                         name = "$serverName - ${video.attr("size").ifBlank { video.attr("label") }}",
-                                        url = videoUrl,
-                                        referer = episodeUrl
+                                        url = videoUrl
                                     ) {
                                         this.quality = getQualityFromName(video.attr("size").ifBlank { video.attr("label") })
                                         this.type = when {
-                                            videoUrl.contains(".m3u8") -> ExtractorLinkType.HLS
+                                            videoUrl.contains(".m3u8") -> ExtractorLinkType.M3U8
                                             else -> ExtractorLinkType.VIDEO
                                         }
                                     }
@@ -306,7 +296,7 @@ class Animesuge : MainAPI() {
             }
             
             // Return true if we found any video sources
-            videoSources.isNotEmpty() || iframes.isNotEmpty() || videoElements.isNotEmpty() || serverElements.isNotEmpty()
+            iframes.isNotEmpty() || videoElements.isNotEmpty() || serverElements.isNotEmpty()
             
         } catch (e: Exception) {
             false
