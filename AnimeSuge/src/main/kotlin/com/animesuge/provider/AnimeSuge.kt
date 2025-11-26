@@ -367,9 +367,10 @@ class AnimeSuge : MainAPI() {
                             "MegaPlay - Direct",
                             videoUrl,
                             referer,
-                            Qualities.Unknown.value,
-                            videoUrl.contains(".m3u8")
-                        )
+                            type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.HLS else ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = Qualities.Unknown.value
+                        }
                     )
                 }
             }
@@ -384,9 +385,10 @@ class AnimeSuge : MainAPI() {
                             "MegaPlay - HLS",
                             match.value,
                             referer,
-                            Qualities.Unknown.value,
-                            true
-                        )
+                            type = ExtractorLinkType.HLS
+                        ) {
+                            this.quality = Qualities.Unknown.value
+                        }
                     )
                 }
                 
@@ -397,9 +399,10 @@ class AnimeSuge : MainAPI() {
                             "MegaPlay - MP4",
                             match.value,
                             referer,
-                            Qualities.Unknown.value,
-                            false
-                        )
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = Qualities.Unknown.value
+                        }
                     )
                 }
             }
@@ -412,9 +415,10 @@ class AnimeSuge : MainAPI() {
                         "MegaPlay",
                         url,
                         referer,
-                        Qualities.Unknown.value,
-                        false
-                    )
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
             }
         } catch (e: Exception) {
@@ -425,9 +429,10 @@ class AnimeSuge : MainAPI() {
                     "MegaPlay",
                     url,
                     referer,
-                    Qualities.Unknown.value,
-                    false
-                )
+                    type = ExtractorLinkType.VIDEO
+                ) {
+                    this.quality = Qualities.Unknown.value
+                }
             )
         }
     }
