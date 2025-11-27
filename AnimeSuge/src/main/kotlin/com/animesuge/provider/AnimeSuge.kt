@@ -37,11 +37,21 @@ class AnimeSuge : MainAPI() {
                 val fullUrl = if (page > 1) "$url?page=$page" else url
                 val doc = app.get(fullUrl).document
                 
-                // Try multiple selectors for anime items
-                val animeList = doc.select("a[href*='/watch/']").mapNotNull { item ->
-                    val titleElement = item.selectFirst("p.name, .name, .title, h3, h2")
+                // Correct selectors based on actual HTML structure
+                val animeList = doc.select(".anime.mini-card .item, a[href^='/watch/']").mapNotNull { item ->
+                    val titleElement = item.selectFirst("p.name, .name, .title, h1, h2, h3")
                     val titleText = titleElement?.text()?.trim() ?: return@mapNotNull null
-                    val href = item.attr("abs:href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    
+                    // Get href - handle both relative and absolute URLs
+                    val href = when {
+                        item.hasAttr("abs:href") -> item.attr("abs:href")
+                        item.hasAttr("href") -> {
+                            val relativeHref = item.attr("href")
+                            if (relativeHref.startsWith("http")) relativeHref else "$mainUrl$relativeHref"
+                        }
+                        else -> return@mapNotNull null
+                    }.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    
                     val poster = item.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() }
                     
                     newAnimeSearchResponse(titleText, href) {
@@ -66,10 +76,19 @@ class AnimeSuge : MainAPI() {
         val searchUrl = "$mainUrl/filter?keyword=$encodedQuery"
         val doc = app.get(searchUrl).document
         
-        return doc.select("a[href*='/watch/']").mapNotNull { item ->
-            val titleElement = item.selectFirst("p.name, .name, .title, h3, h2")
+        return doc.select(".anime.mini-card .item, a[href^='/watch/']").mapNotNull { item ->
+            val titleElement = item.selectFirst("p.name, .name, .title, h1, h2, h3")
             val title = titleElement?.text()?.trim() ?: return@mapNotNull null
-            val href = item.attr("abs:href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            
+            val href = when {
+                item.hasAttr("abs:href") -> item.attr("abs:href")
+                item.hasAttr("href") -> {
+                    val relativeHref = item.attr("href")
+                    if (relativeHref.startsWith("http")) relativeHref else "$mainUrl$relativeHref"
+                }
+                else -> return@mapNotNull null
+            }.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            
             val poster = item.selectFirst("img")?.attr("src")
             
             newAnimeSearchResponse(title, href) {
@@ -79,39 +98,53 @@ class AnimeSuge : MainAPI() {
     }
 
     private fun extractEpisodes(doc: org.jsoup.nodes.Document): List<Episode> {
-        return doc.select("a[href*='/watch/'][href*='/ep-']").mapNotNull { episodeElement ->
+        return doc.select("#media-episode .range a[href*='/watch/']").mapNotNull { episodeElement ->
             val episodeUrl = episodeElement.attr("abs:href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            
+            // Extract episode number from data-slug attribute or text
+            val episodeNumber = episodeElement.attr("data-slug").toIntOrNull() ?: 
+                               episodeElement.text().trim().toIntOrNull() ?: 
+                               Regex("""ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull()
+            
             val episodeTitle = episodeElement.attr("title").ifBlank { 
-                episodeElement.text().trim().ifBlank { "Episode ${episodeElement.text().trim()}" }
+                episodeElement.attr("data-num").ifBlank {
+                    "Episode ${episodeNumber ?: episodeElement.text().trim()}"
+                }
             }
-            val episodeNumber = Regex("""ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 
-                               Regex("""\d+""").find(episodeElement.text())?.value?.toIntOrNull()
             
             newEpisode(episodeUrl) {
                 name = episodeTitle
                 this.episode = episodeNumber
             }
-        }
+        }.sortedBy { it.episode }
     }
 
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url).document
         
-        // Extract main metadata - try multiple selectors
-        val title = doc.selectFirst("h1.title, h1, .entry-title, title")?.text()?.trim() ?: "Unknown"
-        val poster = doc.selectFirst("img[src*='cdn'], .poster img, [itemprop=image]")?.attr("src")
-        val plot = doc.selectFirst(".description, .plot, .summary, [itemprop=description]")?.text()?.trim()
+        // Extract main metadata from the actual HTML structure
+        val title = doc.selectFirst("h1.title, .title, h1, [itemprop=name]")?.text()?.trim() ?: "Unknown"
+        val poster = doc.selectFirst("#media-info .poster img, [itemprop=image]")?.attr("src")
+        val plot = doc.selectFirst(".description, .plot, [itemprop=description]")?.text()?.trim()
         
         // Extract episodes
         val episodes = extractEpisodes(doc)
         
-        // Determine if it's a series or movie based on episodes
-        val isMovie = episodes.isEmpty() || title.contains("movie", true) || url.contains("/movie/")
+        // Extract additional metadata
+        val type = doc.selectFirst(".meta div:contains(Type) + span")?.text()?.trim()
+        val status = doc.selectFirst(".meta div:contains(Status) + span")?.text()?.trim()
+        val totalEpisodes = doc.selectFirst(".meta div:contains(Episodes) + span")?.text()?.toIntOrNull()
+        
+        // Determine if it's a series or movie
+        val isMovie = type.equals("movie", true) || 
+                     url.contains("/movie/") || 
+                     (episodes.isEmpty() && totalEpisodes == null)
         
         if (isMovie) {
             return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
                 this.posterUrl = poster
                 this.plot = plot
+                this.year = null // Extract from metadata if available
             }
         }
         
@@ -119,48 +152,63 @@ class AnimeSuge : MainAPI() {
             name = title,
             url = url,
             type = TvType.Anime,
-            episodes = episodes
-        ) {
-            this.posterUrl = poster
-            this.plot = plot
-        }
+            episodes = episodes,
+            posterUrl = poster,
+            plot = plot,
+            year = null, // Extract from "Premiered" metadata if needed
+            status = when (status?.lowercase()) {
+                "currently airing" -> ShowStatus.Ongoing
+                "finished airing" -> ShowStatus.Completed
+                "not yet aired" -> ShowStatus.ComingSoon
+                else -> null
+            }
+        )
     }
 
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Boolean
     ): Boolean {
         val episodeUrl = data
         
         return try {
             val episodeDoc = app.get(episodeUrl).document
+            var foundSources = false
             
             // Method 1: Look for iframe sources
             val iframes = episodeDoc.select("iframe[src]")
             for (iframe in iframes) {
                 val iframeSrc = iframe.attr("abs:src")
                 if (iframeSrc.isNotBlank()) {
-                    loadExtractor(iframeSrc, subtitleCallback, callback)
+                    foundSources = loadExtractor(iframeSrc, subtitleCallback, callback) || foundSources
                 }
             }
             
-            // Method 2: Look for video elements
+            // Method 2: Look for video elements with data
             val videoElements = episodeDoc.select("video source[src], video[src]")
             for (videoSource in videoElements) {
-                val src = videoSource.attr("abs:src").ifBlank { videoSource.attr("data-src") }
-                if (src.isNotBlank()) {
+                val src = videoSource.attr("abs:src").ifBlank { 
+                    videoSource.attr("data-src").ifBlank {
+                        videoSource.attr("src")
+                    }
+                }
+                if (src.isNotBlank() && (src.contains(".mp4") || src.contains(".m3u8") || src.contains(".webm"))) {
                     callback(
                         newExtractorLink(
                             source = this.name,
                             name = "Direct Video",
-                            url = src
-                        ) {
-                            this.quality = Qualities.Unknown.value
-                            this.type = ExtractorLinkType.VIDEO
-                        }
+                            url = src,
+                            referer = "$mainUrl/",
+                            quality = getQualityFromName(src) ?: Qualities.Unknown.value,
+                            type = when {
+                                src.contains(".m3u8") -> ExtractorLinkType.M3U8
+                                else -> ExtractorLinkType.VIDEO
+                            }
+                        )
                     )
+                    foundSources = true
                 }
             }
             
@@ -186,22 +234,22 @@ class AnimeSuge : MainAPI() {
                                 newExtractorLink(
                                     source = this.name,
                                     name = "Script Video",
-                                    url = videoUrl
-                                ) {
-                                    this.quality = Qualities.Unknown.value
-                                    this.type = when {
+                                    url = videoUrl,
+                                    referer = "$mainUrl/",
+                                    quality = getQualityFromName(videoUrl) ?: Qualities.Unknown.value,
+                                    type = when {
                                         videoUrl.contains(".m3u8") -> ExtractorLinkType.M3U8
                                         else -> ExtractorLinkType.VIDEO
                                     }
-                                }
+                                )
                             )
+                            foundSources = true
                         }
                     }
                 }
             }
             
-            // Return true if we found any sources
-            iframes.isNotEmpty() || videoElements.isNotEmpty()
+            foundSources
             
         } catch (e: Exception) {
             false
