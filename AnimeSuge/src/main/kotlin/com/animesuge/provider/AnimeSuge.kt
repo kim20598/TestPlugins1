@@ -117,7 +117,7 @@ class AnimeSuge : MainAPI() {
         val type = doc.select(".meta div:contains(Type) span").firstOrNull()?.text()?.trim()
         val status = doc.select(".meta div:contains(Status) span").firstOrNull()?.text()?.trim()
         val premiered = doc.select(".meta div:contains(Premiered) span").firstOrNull()?.text()?.trim()
-        val score = doc.select(".meta div:contains(MAL) span").firstOrNull()?.text()?.toFloatOrNull()
+        val malScore = doc.select(".meta div:contains(MAL) span").firstOrNull()?.text()?.toFloatOrNull()
         val totalEpisodes = doc.select(".meta div:contains(Episodes) span").firstOrNull()?.text()?.toIntOrNull()
         val duration = doc.select(".meta div:contains(Duration) span").firstOrNull()?.text()?.trim()
         
@@ -147,8 +147,12 @@ class AnimeSuge : MainAPI() {
             this.backgroundPosterUrl = poster
             this.plot = plot
             this.year = year
-            this.score = score
             this.tags = genres
+            
+            // Convert MAL score to Cloudstream Score object
+            malScore?.let { score ->
+                this.score = Score(score, "MAL")
+            }
             
             // Add recommendations from side panel
             this.recommendations = doc.select(".side-panel .anime.mini-card .item").mapNotNull { recItem ->
