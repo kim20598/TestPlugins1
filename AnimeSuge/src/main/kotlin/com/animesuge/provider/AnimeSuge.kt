@@ -180,7 +180,7 @@ class AnimeSuge : MainAPI() {
         }
     }
 
-    private fun extractEpisodes(doc: org.jsoup.nodes.Document): List<Episode> {
+    private fun extractEpisodes(doc: org.jsoup.nodes.Document, currentUrl: String): List<Episode> {
         // Try multiple selectors for episode list
         val episodeContainers = listOf(
             "#media-episode .range a[href*='/watch/']",
@@ -197,7 +197,7 @@ class AnimeSuge : MainAPI() {
             // Check if it's a movie by looking for explicit movie indicators
             val isMovie = doc.select(".meta div:contains(Type) + span").any { 
                 it.text().contains("movie", true) 
-            } || url.contains("/movie/") || doc.select("h1, .title").any { 
+            } || currentUrl.contains("/movie/") || doc.select("h1, .title").any { 
                 it.text().contains("movie", true) 
             }
             
@@ -206,12 +206,11 @@ class AnimeSuge : MainAPI() {
             }
             
             // If not a movie but no episodes found, check if it's a single episode
-            val currentEpisodeUrl = doc.location()
-            if (currentEpisodeUrl.contains("/ep-")) {
+            if (currentUrl.contains("/ep-")) {
                 // This is already an episode page, create a single episode
-                val episodeNumber = Regex("""ep-(\d+)""").find(currentEpisodeUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+                val episodeNumber = Regex("""ep-(\d+)""").find(currentUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
                 return listOf(
-                    newEpisode(currentEpisodeUrl) {
+                    newEpisode(currentUrl) {
                         name = "Episode $episodeNumber"
                         this.episode = episodeNumber
                     }
@@ -227,7 +226,7 @@ class AnimeSuge : MainAPI() {
             
             // Default: assume it's a series but episodes aren't loaded yet
             return listOf(
-                newEpisode(currentEpisodeUrl) {
+                newEpisode(currentUrl) {
                     name = "Episode 1"
                     this.episode = 1
                 }
@@ -270,8 +269,8 @@ class AnimeSuge : MainAPI() {
         val type = doc.selectFirst(".meta div:contains(Type) + span")?.text()?.trim()
         val status = doc.selectFirst(".meta div:contains(Status) + span")?.text()?.trim()
         
-        // Extract episodes
-        val episodes = extractEpisodes(doc)
+        // Extract episodes - pass the current URL to the function
+        val episodes = extractEpisodes(doc, url)
         
         // Better logic to determine if it's a movie or series
         val isMovie = when {
