@@ -149,9 +149,12 @@ class AnimeSuge : MainAPI() {
             this.year = year
             this.tags = genres
             
-            // Convert MAL score to Cloudstream Score object
+            // Set score using the proper method
             malScore?.let { score ->
-                this.score = Score(score, "MAL")
+                // Convert to Int (multiply by 10 to keep one decimal place)
+                val scoreInt = (score * 10).toInt()
+                // Use the score setter which accepts Int
+                this.score = scoreInt
             }
             
             // Add recommendations from side panel
