@@ -132,44 +132,30 @@ class AnimeSuge : MainAPI() {
         
         // Extract additional metadata
         val type = doc.selectFirst(".meta div:contains(Type) + span")?.text()?.trim()
-        val status = doc.selectFirst(".meta div:contains(Status) + span")?.text()?.trim()
-        val totalEpisodes = doc.selectFirst(".meta div:contains(Episodes) + span")?.text()?.toIntOrNull()
         
         // Determine if it's a series or movie
         val isMovie = type.equals("movie", true) || 
                      url.contains("/movie/") || 
-                     (episodes.isEmpty() && totalEpisodes == null)
-        
+                     episodes.isEmpty()
+
         if (isMovie) {
             return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
                 this.posterUrl = poster
                 this.plot = plot
-                this.year = null // Extract from metadata if available
             }
         }
         
-        return newTvSeriesLoadResponse(
-            name = title,
-            url = url,
-            type = TvType.Anime,
-            episodes = episodes,
-            posterUrl = poster,
-            plot = plot,
-            year = null, // Extract from "Premiered" metadata if needed
-            status = when (status?.lowercase()) {
-                "currently airing" -> ShowStatus.Ongoing
-                "finished airing" -> ShowStatus.Completed
-                "not yet aired" -> ShowStatus.ComingSoon
-                else -> null
-            }
-        )
+        return newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
+            this.posterUrl = poster
+            this.plot = plot
+        }
     }
 
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Boolean
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
         val episodeUrl = data
         
@@ -197,16 +183,16 @@ class AnimeSuge : MainAPI() {
                 if (src.isNotBlank() && (src.contains(".mp4") || src.contains(".m3u8") || src.contains(".webm"))) {
                     callback(
                         newExtractorLink(
-                            source = this.name,
                             name = "Direct Video",
                             url = src,
-                            referer = "$mainUrl/",
-                            quality = getQualityFromName(src) ?: Qualities.Unknown.value,
+                            source = this.name,
                             type = when {
                                 src.contains(".m3u8") -> ExtractorLinkType.M3U8
                                 else -> ExtractorLinkType.VIDEO
                             }
-                        )
+                        ) {
+                            this.quality = getQualityFromName(src) ?: Qualities.Unknown.value
+                        }
                     )
                     foundSources = true
                 }
@@ -232,16 +218,16 @@ class AnimeSuge : MainAPI() {
                         if (videoUrl.contains(".mp4") || videoUrl.contains(".m3u8") || videoUrl.contains(".webm")) {
                             callback(
                                 newExtractorLink(
-                                    source = this.name,
                                     name = "Script Video",
                                     url = videoUrl,
-                                    referer = "$mainUrl/",
-                                    quality = getQualityFromName(videoUrl) ?: Qualities.Unknown.value,
+                                    source = this.name,
                                     type = when {
                                         videoUrl.contains(".m3u8") -> ExtractorLinkType.M3U8
                                         else -> ExtractorLinkType.VIDEO
                                     }
-                                )
+                                ) {
+                                    this.quality = getQualityFromName(videoUrl) ?: Qualities.Unknown.value
+                                }
                             )
                             foundSources = true
                         }
