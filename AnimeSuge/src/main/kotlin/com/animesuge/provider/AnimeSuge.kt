@@ -37,9 +37,9 @@ class AnimeSuge : MainAPI() {
                 val fullUrl = if (page > 1) "$url?page=$page" else url
                 val doc = app.get(fullUrl).document
                 
-                // Correct selectors based on actual HTML structure
-                val animeList = doc.select(".anime.mini-card .item, a[href^='/watch/']").mapNotNull { item ->
-                    val titleElement = item.selectFirst("p.name, .name, .title, h1, h2, h3")
+                // Correct selectors based on actual homepage structure
+                val animeList = doc.select(".anime.mini-card .item, .anime.main-card .item, a[href*='/watch/']").mapNotNull { item ->
+                    val titleElement = item.selectFirst(".name, p.name, .detail .name, .item-bottom .name")
                     val titleText = titleElement?.text()?.trim() ?: return@mapNotNull null
                     
                     // Get href - handle both relative and absolute URLs
@@ -52,7 +52,8 @@ class AnimeSuge : MainAPI() {
                         else -> return@mapNotNull null
                     }.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                     
-                    val poster = item.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() }
+                    val poster = item.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() } ?: 
+                                item.selectFirst("img")?.attr("data-src")?.takeIf { it.isNotBlank() }
                     
                     newAnimeSearchResponse(titleText, href) {
                         this.posterUrl = poster
@@ -67,6 +68,54 @@ class AnimeSuge : MainAPI() {
             }
         }
 
+        // If no categories work, try the homepage directly
+        if (items.isEmpty()) {
+            try {
+                val doc = app.get("$mainUrl/home").document
+                
+                // Try to get anime from the "Recently Updated" section
+                val updatedList = doc.select(".original.anime.main-card .item").mapNotNull { item ->
+                    val titleElement = item.selectFirst(".name, .item-bottom .name a")
+                    val titleText = titleElement?.text()?.trim() ?: return@mapNotNull null
+                    
+                    val href = item.selectFirst("a[href*='/watch/']")?.attr("abs:href")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    
+                    val poster = item.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() } ?: 
+                                item.selectFirst("img")?.attr("data-src")?.takeIf { it.isNotBlank() }
+                    
+                    newAnimeSearchResponse(titleText, href) {
+                        this.posterUrl = poster
+                    }
+                }
+                
+                if (updatedList.isNotEmpty()) {
+                    items.add(HomePageList("Recently Updated", updatedList))
+                }
+                
+                // Try to get from "Recently Added" section
+                val addedList = doc.select(".hot-stat .added .anime.mini-card .item").mapNotNull { item ->
+                    val titleElement = item.selectFirst(".name, .detail .name")
+                    val titleText = titleElement?.text()?.trim() ?: return@mapNotNull null
+                    
+                    val href = item.attr("abs:href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    
+                    val poster = item.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() } ?: 
+                                item.selectFirst("img")?.attr("data-src")?.takeIf { it.isNotBlank() }
+                    
+                    newAnimeSearchResponse(titleText, href) {
+                        this.posterUrl = poster
+                    }
+                }
+                
+                if (addedList.isNotEmpty()) {
+                    items.add(HomePageList("Recently Added", addedList))
+                }
+                
+            } catch (e: Exception) {
+                // If everything fails, throw error
+            }
+        }
+
         if (items.isEmpty()) throw ErrorLoadingException()
         return newHomePageResponse(items)
     }
@@ -76,8 +125,8 @@ class AnimeSuge : MainAPI() {
         val searchUrl = "$mainUrl/filter?keyword=$encodedQuery"
         val doc = app.get(searchUrl).document
         
-        return doc.select(".anime.mini-card .item, a[href^='/watch/']").mapNotNull { item ->
-            val titleElement = item.selectFirst("p.name, .name, .title, h1, h2, h3")
+        return doc.select(".anime.mini-card .item, .anime.main-card .item, a[href*='/watch/']").mapNotNull { item ->
+            val titleElement = item.selectFirst(".name, p.name, .detail .name, .item-bottom .name")
             val title = titleElement?.text()?.trim() ?: return@mapNotNull null
             
             val href = when {
@@ -89,7 +138,8 @@ class AnimeSuge : MainAPI() {
                 else -> return@mapNotNull null
             }.takeIf { it.isNotBlank() } ?: return@mapNotNull null
             
-            val poster = item.selectFirst("img")?.attr("src")
+            val poster = item.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() } ?: 
+                        item.selectFirst("img")?.attr("data-src")?.takeIf { it.isNotBlank() }
             
             newAnimeSearchResponse(title, href) {
                 this.posterUrl = poster
