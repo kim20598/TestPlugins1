@@ -123,57 +123,115 @@ class AnimeSuge : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val searchUrl = "$mainUrl/filter?keyword=$encodedQuery"
-        val doc = app.get(searchUrl).document
         
-        return doc.select(".anime.mini-card .item, .anime.main-card .item, a[href*='/watch/']").mapNotNull { item ->
-            val titleElement = item.selectFirst(".name, p.name, .detail .name, .item-bottom .name")
-            val title = titleElement?.text()?.trim() ?: return@mapNotNull null
+        return try {
+            val doc = app.get(searchUrl).document
             
-            val href = when {
-                item.hasAttr("abs:href") -> item.attr("abs:href")
-                item.hasAttr("href") -> {
-                    val relativeHref = item.attr("href")
-                    if (relativeHref.startsWith("http")) relativeHref else "$mainUrl$relativeHref"
+            // Try multiple selectors for search results
+            val results = mutableListOf<SearchResponse>()
+            
+            // Method 1: Try main card items
+            val mainCards = doc.select(".anime.main-card .item").mapNotNull { item ->
+                val titleElement = item.selectFirst(".name, .item-bottom .name a")
+                val title = titleElement?.text()?.trim() ?: return@mapNotNull null
+                
+                val href = item.selectFirst("a[href*='/watch/']")?.attr("abs:href") ?: return@mapNotNull null
+                val poster = item.selectFirst("img")?.attr("src") ?: item.selectFirst("img")?.attr("data-src")
+                
+                newAnimeSearchResponse(title, href) {
+                    this.posterUrl = poster
                 }
-                else -> return@mapNotNull null
-            }.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            
-            val poster = item.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() } ?: 
-                        item.selectFirst("img")?.attr("data-src")?.takeIf { it.isNotBlank() }
-            
-            newAnimeSearchResponse(title, href) {
-                this.posterUrl = poster
             }
-        }.distinctBy { it.url }
+            results.addAll(mainCards)
+            
+            // Method 2: Try mini card items
+            val miniCards = doc.select(".anime.mini-card .item").mapNotNull { item ->
+                val titleElement = item.selectFirst(".name, .detail .name")
+                val title = titleElement?.text()?.trim() ?: return@mapNotNull null
+                
+                val href = item.attr("abs:href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val poster = item.selectFirst("img")?.attr("src") ?: item.selectFirst("img")?.attr("data-src")
+                
+                newAnimeSearchResponse(title, href) {
+                    this.posterUrl = poster
+                }
+            }
+            results.addAll(miniCards)
+            
+            // Method 3: Try any watch links as fallback
+            if (results.isEmpty()) {
+                val watchLinks = doc.select("a[href*='/watch/']").mapNotNull { item ->
+                    val title = item.attr("title").ifBlank { item.text().trim() }
+                    if (title.isBlank()) return@mapNotNull null
+                    
+                    val href = item.attr("abs:href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    val poster = item.selectFirst("img")?.attr("src") ?: item.selectFirst("img")?.attr("data-src")
+                    
+                    newAnimeSearchResponse(title, href) {
+                        this.posterUrl = poster
+                    }
+                }
+                results.addAll(watchLinks)
+            }
+            
+            results.distinctBy { it.url }
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     private fun extractEpisodes(doc: org.jsoup.nodes.Document): List<Episode> {
         // Try multiple selectors for episode list
-        val episodeElements = doc.select("#media-episode .range a[href*='/watch/'], .range a[href*='/watch/'], [id*='episode'] a[href*='/watch/']")
+        val episodeContainers = listOf(
+            "#media-episode .range a[href*='/watch/']",
+            ".range a[href*='/watch/']", 
+            "a[href*='/watch/'][href*='/ep-']",
+            "[data-slug]"
+        )
+        
+        val episodeElements = episodeContainers.flatMap { selector ->
+            doc.select(selector)
+        }.distinctBy { it.attr("abs:href") }
         
         if (episodeElements.isEmpty()) {
-            // If no episodes found, check if it's actually a movie by looking for movie indicators
-            val isMovie = doc.select(".meta div:contains(Type) + span").any { it.text().contains("movie", true) } ||
-                         doc.select("h1, .title").any { it.text().contains("movie", true) } ||
-                         doc.outerHtml().contains("/movie/")
+            // Check if it's a movie by looking for explicit movie indicators
+            val isMovie = doc.select(".meta div:contains(Type) + span").any { 
+                it.text().contains("movie", true) 
+            } || url.contains("/movie/") || doc.select("h1, .title").any { 
+                it.text().contains("movie", true) 
+            }
             
             if (isMovie) {
                 return emptyList() // It's a movie, return empty episodes
             }
             
-            // If not a movie but no episodes found, try to find at least one episode link
-            val singleEpisode = doc.select("a[href*='/watch/'][href*='/ep-']").firstOrNull()
-            if (singleEpisode != null) {
-                val episodeUrl = singleEpisode.attr("abs:href")
-                val episodeNumber = Regex("""ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
-                
+            // If not a movie but no episodes found, check if it's a single episode
+            val currentEpisodeUrl = doc.location()
+            if (currentEpisodeUrl.contains("/ep-")) {
+                // This is already an episode page, create a single episode
+                val episodeNumber = Regex("""ep-(\d+)""").find(currentEpisodeUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
                 return listOf(
-                    newEpisode(episodeUrl) {
-                        name = "Episode 1"
+                    newEpisode(currentEpisodeUrl) {
+                        name = "Episode $episodeNumber"
                         this.episode = episodeNumber
                     }
                 )
             }
+            
+            // Check if it's "coming soon" or "not yet aired"
+            val status = doc.select(".meta div:contains(Status) + span").text().orEmpty()
+            if (status.contains("not yet aired", true) || status.contains("coming soon", true)) {
+                // It's an upcoming anime with no episodes yet
+                return emptyList()
+            }
+            
+            // Default: assume it's a series but episodes aren't loaded yet
+            return listOf(
+                newEpisode(currentEpisodeUrl) {
+                    name = "Episode 1"
+                    this.episode = 1
+                }
+            )
         }
         
         return episodeElements.mapNotNull { episodeElement ->
@@ -183,12 +241,12 @@ class AnimeSuge : MainAPI() {
             val episodeNumber = episodeElement.attr("data-slug").toIntOrNull() ?: 
                                episodeElement.text().trim().toIntOrNull() ?: 
                                Regex("""ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull() ?:
-                               Regex("""/ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull()
+                               Regex("""/ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
             
             val episodeTitle = episodeElement.attr("title").ifBlank { 
                 episodeElement.attr("data-num").ifBlank {
                     episodeElement.text().trim().ifBlank {
-                        "Episode ${episodeNumber ?: "Unknown"}"
+                        "Episode $episodeNumber"
                     }
                 }
             }
@@ -197,7 +255,7 @@ class AnimeSuge : MainAPI() {
                 name = episodeTitle
                 this.episode = episodeNumber
             }
-        }.sortedBy { it.episode }
+        }.sortedBy { it.episode ?: 0 }
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -210,7 +268,7 @@ class AnimeSuge : MainAPI() {
         
         // Extract additional metadata to help determine type
         val type = doc.selectFirst(".meta div:contains(Type) + span")?.text()?.trim()
-        val totalEpisodes = doc.selectFirst(".meta div:contains(Episodes) + span")?.text()?.toIntOrNull()
+        val status = doc.selectFirst(".meta div:contains(Status) + span")?.text()?.trim()
         
         // Extract episodes
         val episodes = extractEpisodes(doc)
@@ -222,21 +280,27 @@ class AnimeSuge : MainAPI() {
             url.contains("/movie/") -> true
             doc.select("h1, .title").any { it.text().contains("movie", true) } -> true
             
-            // Series indicators
-            episodes.size > 1 -> false
-            totalEpisodes != null && totalEpisodes > 1 -> false
-            doc.select(".meta div:contains(Episodes) + span").isNotEmpty() -> false
-            doc.select("#media-episode").isNotEmpty() -> false
-            
-            // Default to series if we found at least one episode
+            // Series indicators - if we found episodes, it's a series
             episodes.isNotEmpty() -> false
             
-            // Otherwise assume it's a movie
+            // Check status for upcoming anime
+            status?.contains("not yet aired", true) == true -> false
+            status?.contains("coming soon", true) == true -> false
+            
+            // Default to movie if no episodes found and no series indicators
             else -> true
         }
 
         if (isMovie) {
             return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
+                this.posterUrl = poster
+                this.plot = plot
+            }
+        }
+        
+        // For upcoming anime with no episodes yet
+        if (episodes.isEmpty() && (status?.contains("not yet aired", true) == true || status?.contains("coming soon", true) == true)) {
+            return newTvSeriesLoadResponse(title, url, TvType.Anime, emptyList()) {
                 this.posterUrl = poster
                 this.plot = plot
             }
