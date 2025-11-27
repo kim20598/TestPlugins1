@@ -148,17 +148,48 @@ class AnimeSuge : MainAPI() {
     }
 
     private fun extractEpisodes(doc: org.jsoup.nodes.Document): List<Episode> {
-        return doc.select("#media-episode .range a[href*='/watch/']").mapNotNull { episodeElement ->
+        // Try multiple selectors for episode list
+        val episodeElements = doc.select("#media-episode .range a[href*='/watch/'], .range a[href*='/watch/'], [id*='episode'] a[href*='/watch/']")
+        
+        if (episodeElements.isEmpty()) {
+            // If no episodes found, check if it's actually a movie by looking for movie indicators
+            val isMovie = doc.select(".meta div:contains(Type) + span").any { it.text().contains("movie", true) } ||
+                         doc.select("h1, .title").any { it.text().contains("movie", true) } ||
+                         doc.outerHtml().contains("/movie/")
+            
+            if (isMovie) {
+                return emptyList() // It's a movie, return empty episodes
+            }
+            
+            // If not a movie but no episodes found, try to find at least one episode link
+            val singleEpisode = doc.select("a[href*='/watch/'][href*='/ep-']").firstOrNull()
+            if (singleEpisode != null) {
+                val episodeUrl = singleEpisode.attr("abs:href")
+                val episodeNumber = Regex("""ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+                
+                return listOf(
+                    newEpisode(episodeUrl) {
+                        name = "Episode 1"
+                        this.episode = episodeNumber
+                    }
+                )
+            }
+        }
+        
+        return episodeElements.mapNotNull { episodeElement ->
             val episodeUrl = episodeElement.attr("abs:href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
             
-            // Extract episode number from data-slug attribute or text
+            // Extract episode number from multiple possible sources
             val episodeNumber = episodeElement.attr("data-slug").toIntOrNull() ?: 
                                episodeElement.text().trim().toIntOrNull() ?: 
-                               Regex("""ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull()
+                               Regex("""ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull() ?:
+                               Regex("""/ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull()
             
             val episodeTitle = episodeElement.attr("title").ifBlank { 
                 episodeElement.attr("data-num").ifBlank {
-                    "Episode ${episodeNumber ?: episodeElement.text().trim()}"
+                    episodeElement.text().trim().ifBlank {
+                        "Episode ${episodeNumber ?: "Unknown"}"
+                    }
                 }
             }
             
@@ -177,16 +208,32 @@ class AnimeSuge : MainAPI() {
         val poster = doc.selectFirst("#media-info .poster img, [itemprop=image]")?.attr("src")
         val plot = doc.selectFirst(".description, .plot, [itemprop=description]")?.text()?.trim()
         
+        // Extract additional metadata to help determine type
+        val type = doc.selectFirst(".meta div:contains(Type) + span")?.text()?.trim()
+        val totalEpisodes = doc.selectFirst(".meta div:contains(Episodes) + span")?.text()?.toIntOrNull()
+        
         // Extract episodes
         val episodes = extractEpisodes(doc)
         
-        // Extract additional metadata
-        val type = doc.selectFirst(".meta div:contains(Type) + span")?.text()?.trim()
-        
-        // Determine if it's a series or movie
-        val isMovie = type.equals("movie", true) || 
-                     url.contains("/movie/") || 
-                     episodes.isEmpty()
+        // Better logic to determine if it's a movie or series
+        val isMovie = when {
+            // Explicit movie indicators
+            type?.contains("movie", true) == true -> true
+            url.contains("/movie/") -> true
+            doc.select("h1, .title").any { it.text().contains("movie", true) } -> true
+            
+            // Series indicators
+            episodes.size > 1 -> false
+            totalEpisodes != null && totalEpisodes > 1 -> false
+            doc.select(".meta div:contains(Episodes) + span").isNotEmpty() -> false
+            doc.select("#media-episode").isNotEmpty() -> false
+            
+            // Default to series if we found at least one episode
+            episodes.isNotEmpty() -> false
+            
+            // Otherwise assume it's a movie
+            else -> true
+        }
 
         if (isMovie) {
             return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
