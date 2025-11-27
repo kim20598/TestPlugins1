@@ -209,7 +209,7 @@ class AnimeSuge : MainAPI() {
                     
                     episodes.add(
                         newEpisode(episodeUrl) {
-                            name = episodeTitle
+                            this.name = episodeTitle
                             this.episode = episodeNumber
                         }
                     )
@@ -235,7 +235,7 @@ class AnimeSuge : MainAPI() {
                     
                     episodes.add(
                         newEpisode(episodeUrl) {
-                            name = episodeTitle
+                            this.name = episodeTitle
                             this.episode = episodeNumber
                         }
                     )
@@ -248,7 +248,7 @@ class AnimeSuge : MainAPI() {
             val episodeNumber = Regex("""ep-(\d+)""").find(currentUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
             episodes.add(
                 newEpisode(currentUrl) {
-                    name = "Episode $episodeNumber"
+                    this.name = "Episode $episodeNumber"
                     this.episode = episodeNumber
                 }
             )
