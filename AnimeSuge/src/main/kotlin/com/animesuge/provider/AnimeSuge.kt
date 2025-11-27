@@ -181,17 +181,8 @@ class AnimeSuge : MainAPI() {
     }
 
     private fun extractEpisodes(doc: org.jsoup.nodes.Document, currentUrl: String): List<Episode> {
-        // Try multiple selectors for episode list
-        val episodeContainers = listOf(
-            "#media-episode .range a[href*='/watch/']",
-            ".range a[href*='/watch/']", 
-            "a[href*='/watch/'][href*='/ep-']",
-            "[data-slug]"
-        )
-        
-        val episodeElements = episodeContainers.flatMap { selector ->
-            doc.select(selector)
-        }.distinctBy { it.attr("abs:href") }
+        // Look for ALL episode links in the episode container
+        val episodeElements = doc.select("#media-episode a[href*='/watch/'], .range a[href*='/watch/']")
         
         if (episodeElements.isEmpty()) {
             // Check if it's a movie by looking for explicit movie indicators
@@ -205,9 +196,15 @@ class AnimeSuge : MainAPI() {
                 return emptyList() // It's a movie, return empty episodes
             }
             
-            // If not a movie but no episodes found, check if it's a single episode
+            // Check if it's "coming soon" or "not yet aired"
+            val status = doc.select(".meta div:contains(Status) + span").text().orEmpty()
+            if (status.contains("not yet aired", true) || status.contains("coming soon", true)) {
+                // It's an upcoming anime with no episodes yet
+                return emptyList()
+            }
+            
+            // If we're on an episode page itself, create just that episode
             if (currentUrl.contains("/ep-")) {
-                // This is already an episode page, create a single episode
                 val episodeNumber = Regex("""ep-(\d+)""").find(currentUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
                 return listOf(
                     newEpisode(currentUrl) {
@@ -217,22 +214,11 @@ class AnimeSuge : MainAPI() {
                 )
             }
             
-            // Check if it's "coming soon" or "not yet aired"
-            val status = doc.select(".meta div:contains(Status) + span").text().orEmpty()
-            if (status.contains("not yet aired", true) || status.contains("coming soon", true)) {
-                // It's an upcoming anime with no episodes yet
-                return emptyList()
-            }
-            
-            // Default: assume it's a series but episodes aren't loaded yet
-            return listOf(
-                newEpisode(currentUrl) {
-                    name = "Episode 1"
-                    this.episode = 1
-                }
-            )
+            // If no episodes found but it's a series, return empty list
+            return emptyList()
         }
         
+        // Extract ALL real episodes
         return episodeElements.mapNotNull { episodeElement ->
             val episodeUrl = episodeElement.attr("abs:href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
             
@@ -240,7 +226,10 @@ class AnimeSuge : MainAPI() {
             val episodeNumber = episodeElement.attr("data-slug").toIntOrNull() ?: 
                                episodeElement.text().trim().toIntOrNull() ?: 
                                Regex("""ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull() ?:
-                               Regex("""/ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+                               Regex("""/ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull()
+            
+            // Skip if we can't determine episode number
+            if (episodeNumber == null) return@mapNotNull null
             
             val episodeTitle = episodeElement.attr("title").ifBlank { 
                 episodeElement.attr("data-num").ifBlank {
@@ -268,9 +257,16 @@ class AnimeSuge : MainAPI() {
         // Extract additional metadata to help determine type
         val type = doc.selectFirst(".meta div:contains(Type) + span")?.text()?.trim()
         val status = doc.selectFirst(".meta div:contains(Status) + span")?.text()?.trim()
+        val totalEpisodes = doc.selectFirst(".meta div:contains(Episodes) + span")?.text()?.toIntOrNull()
         
         // Extract episodes - pass the current URL to the function
         val episodes = extractEpisodes(doc, url)
+        
+        // Debug: Print how many episodes were found
+        println("DEBUG: Found ${episodes.size} episodes for $title")
+        if (episodes.isNotEmpty()) {
+            println("DEBUG: Episode numbers: ${episodes.map { it.episode }}")
+        }
         
         // Better logic to determine if it's a movie or series
         val isMovie = when {
@@ -281,6 +277,7 @@ class AnimeSuge : MainAPI() {
             
             // Series indicators - if we found episodes, it's a series
             episodes.isNotEmpty() -> false
+            totalEpisodes != null && totalEpisodes > 1 -> false
             
             // Check status for upcoming anime
             status?.contains("not yet aired", true) == true -> false
