@@ -117,7 +117,6 @@ class AnimeSuge : MainAPI() {
         val type = doc.select(".meta div:contains(Type) span").firstOrNull()?.text()?.trim()
         val status = doc.select(".meta div:contains(Status) span").firstOrNull()?.text()?.trim()
         val premiered = doc.select(".meta div:contains(Premiered) span").firstOrNull()?.text()?.trim()
-        val malScore = doc.select(".meta div:contains(MAL) span").firstOrNull()?.text()?.toFloatOrNull()
         val totalEpisodes = doc.select(".meta div:contains(Episodes) span").firstOrNull()?.text()?.toIntOrNull()
         val duration = doc.select(".meta div:contains(Duration) span").firstOrNull()?.text()?.trim()
         
@@ -148,14 +147,6 @@ class AnimeSuge : MainAPI() {
             this.plot = plot
             this.year = year
             this.tags = genres
-            
-            // Set score using the proper Score object
-            malScore?.let { score ->
-                // Convert to percentage (multiply by 10 to get 0-100 scale)
-                val scorePercent = (score * 10).toInt()
-                // Create Score object with the proper constructor
-                this.score = Score(scorePercent)
-            }
             
             // Add recommendations from side panel
             this.recommendations = doc.select(".side-panel .anime.mini-card .item").mapNotNull { recItem ->
