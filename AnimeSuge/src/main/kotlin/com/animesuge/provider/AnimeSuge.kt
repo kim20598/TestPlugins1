@@ -41,8 +41,8 @@ class AnimeSuge : MainAPI() {
                 val animeList = doc.select("a[href*='/watch/']").mapNotNull { item ->
                     val titleElement = item.selectFirst("p.name, .name, .title, h3, h2")
                     val titleText = titleElement?.text()?.trim() ?: return@mapNotNull null
-                    val href = fixUrl(item.attr("href"), mainUrl)
-                    val poster = item.selectFirst("img")?.attr("src")?.let { fixUrl(it, mainUrl) }
+                    val href = fixUrl(item.attr("href"))
+                    val poster = item.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
                     
                     newAnimeSearchResponse(titleText, href) {
                         this.posterUrl = poster
@@ -69,8 +69,8 @@ class AnimeSuge : MainAPI() {
         return doc.select("a[href*='/watch/']").mapNotNull { item ->
             val titleElement = item.selectFirst("p.name, .name, .title, h3, h2")
             val title = titleElement?.text()?.trim() ?: return@mapNotNull null
-            val href = fixUrl(item.attr("href"), mainUrl)
-            val poster = item.selectFirst("img")?.attr("src")?.let { fixUrl(it, mainUrl) }
+            val href = fixUrl(item.attr("href"))
+            val poster = item.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
             
             newAnimeSearchResponse(title, href) {
                 this.posterUrl = poster
@@ -84,7 +84,7 @@ class AnimeSuge : MainAPI() {
         
         // Method 1: Look for episode links in range divs
         val rangeEpisodes = doc.select("div.range a[href*='/ep-']").mapNotNull { episodeElement ->
-            val episodeUrl = fixUrl(episodeElement.attr("href"), mainUrl)
+            val episodeUrl = fixUrl(episodeElement.attr("href"))
             val episodeTitle = episodeElement.attr("title").ifBlank { 
                 episodeElement.text().trim().ifBlank { "Episode ${episodeElement.text().trim()}" }
             }
@@ -102,7 +102,7 @@ class AnimeSuge : MainAPI() {
         // Method 2: Look for any episode links
         if (episodes.isEmpty()) {
             val fallbackEpisodes = doc.select("a[href*='/ep-']").mapNotNull { episodeElement ->
-                val episodeUrl = fixUrl(episodeElement.attr("href"), mainUrl)
+                val episodeUrl = fixUrl(episodeElement.attr("href"))
                 val episodeTitle = episodeElement.attr("title").ifBlank { 
                     episodeElement.text().trim().ifBlank { "Episode" }
                 }
@@ -125,7 +125,7 @@ class AnimeSuge : MainAPI() {
         
         // Extract main metadata
         val title = doc.selectFirst("h1.title, h1, .entry-title")?.text()?.trim() ?: "Unknown"
-        val poster = doc.selectFirst("img[src*='cdn'], .poster img, [itemprop=image]")?.attr("src")?.let { fixUrl(it, mainUrl) }
+        val poster = doc.selectFirst("img[src*='cdn'], .poster img, [itemprop=image]")?.attr("src")?.let { fixUrl(it) }
         val plot = doc.selectFirst(".description, .plot, .summary")?.text()?.trim()
         
         // Extract episodes
@@ -168,7 +168,7 @@ class AnimeSuge : MainAPI() {
             // Method 1: Look for iframe sources
             val iframes = episodeDoc.select("iframe[src]")
             for (iframe in iframes) {
-                val iframeSrc = fixUrl(iframe.attr("src"), mainUrl)
+                val iframeSrc = fixUrl(iframe.attr("src"))
                 if (iframeSrc.isNotBlank()) {
                     loadExtractor(iframeSrc, subtitleCallback, callback)
                     foundSources = true
@@ -178,8 +178,8 @@ class AnimeSuge : MainAPI() {
             // Method 2: Look for video elements
             val videoElements = episodeDoc.select("video source[src], video[src]")
             for (videoSource in videoElements) {
-                val src = fixUrl(videoSource.attr("src"), mainUrl).ifBlank { 
-                    fixUrl(videoSource.attr("data-src"), mainUrl) 
+                val src = fixUrl(videoSource.attr("src")).ifBlank { 
+                    fixUrl(videoSource.attr("data-src"))
                 }
                 if (src.isNotBlank()) {
                     callback(
