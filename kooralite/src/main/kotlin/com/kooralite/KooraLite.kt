@@ -6,78 +6,88 @@ import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
 class KooraLite : MainAPI() {
-    override var mainUrl = "https://www.kooralite.com"
+    override var mainUrl = "https://www.kooralite.live"
     override var name = "KooraLite - كورة لايت"
     override var lang = "ar"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie)
     
-    private fun String.getPosterFromMatch(): String? {
-        // Try to extract team logos or match image
-        return when {
-            this.contains("باريس") || this.contains("psg") -> "https://upload.wikimedia.org/wikipedia/en/a/a7/Paris_Saint-Germain_F.C..svg"
-            this.contains("ريال") || this.contains("مدريد") || this.contains("realmadrid") -> "https://upload.wikimedia.org/wikipedia/en/5/56/Real_Madrid_CF.svg"
-            this.contains("برشلونة") || this.contains("barcelona") -> "https://upload.wikimedia.org/wikipedia/en/4/47/FC_Barcelona_%28crest%29.svg"
-            this.contains("مانشستر") || this.contains("manchester") -> "https://upload.wikimedia.org/wikipedia/en/7/7a/Manchester_United_FC_crest.svg"
-            this.contains("ليفربول") || this.contains("liverpool") -> "https://upload.wikimedia.org/wikipedia/en/0/0c/Liverpool_FC.svg"
-            this.contains("تشيلسي") || this.contains("chelsea") -> "https://upload.wikimedia.org/wikipedia/en/c/cc/Chelsea_FC.svg"
-            this.contains("الأهلي") || this.contains("al-ahly") -> "https://upload.wikimedia.org/wikipedia/ar/7/71/Al_Ahly_SC_logo.png"
-            this.contains("الزمالك") || this.contains("zamalek") -> "https://upload.wikimedia.org/wikipedia/ar/4/4b/Zamalek_SC_logo.png"
-            else -> null
+    private fun Element.toMatchSearchResponse(): SearchResponse? {
+        // Extract match information from .AY_Match div
+        val link = selectFirst("a")?.attr("href") ?: return null
+        val href = fixUrl(link)
+        
+        // Get team names
+        val team1 = selectFirst(".MT_Team.TM1 .TM_Name")?.text()?.trim() ?: ""
+        val team2 = selectFirst(".MT_Team.TM2 .TM_Name")?.text()?.trim() ?: ""
+        
+        if (team1.isBlank() || team2.isBlank()) return null
+        
+        // Create title: Team1 vs Team2
+        val title = "$team1 vs $team2"
+        
+        // Get match status
+        val matchDiv = this
+        val statusClass = matchDiv.classNames().firstOrNull { it in listOf("live", "finished", "comming-soon") } ?: ""
+        val statusText = when (statusClass) {
+            "live" -> "🔴 مباشر"
+            "finished" -> "✅ انتهت"
+            else -> "⏳ قادم"
+        }
+        
+        // Get match time
+        val time = selectFirst(".MT_Time")?.text()?.trim() ?: ""
+        
+        // Get tournament/league
+        val tournament = selectFirst(".MT_Info li:last-child span")?.text()?.trim() ?: ""
+        
+        // Get poster/logo (team logo)
+        val poster = selectFirst(".TM_Logo img")?.attr("src")?.let { 
+            if (it.startsWith("http")) it else fixUrl(it) 
+        }
+        
+        // Create enhanced title
+        val enhancedTitle = "$statusText $title"
+        
+        // Store match data
+        val matchData = "$title|$time|$tournament|$statusClass|$poster|$team1|$team2"
+        val dataUrl = "$href|$matchData"
+        
+        return newMovieSearchResponse(enhancedTitle, dataUrl, TvType.Movie) {
+            this.posterUrl = poster
         }
     }
     
-    private fun Element.toSearchResponse(): SearchResponse? {
-        // Try different selectors based on actual website structure
+    private fun Element.toArticleSearchResponse(): SearchResponse? {
+        // For regular articles/posts
         val link = selectFirst("a")?.attr("href") ?: return null
-        val href = when {
-            link.startsWith("http") -> link
-            link.startsWith("/") -> "$mainUrl$link"
-            else -> "$mainUrl/$link"
+        val href = fixUrl(link)
+        
+        val title = selectFirst(".gr-title, h3")?.text()?.trim() ?: return null
+        val poster = selectFirst("img")?.attr("data-src")?.let {
+            if (it.startsWith("http")) it else fixUrl(it)
+        } ?: selectFirst("img")?.attr("src")?.let {
+            if (it.startsWith("http")) it else fixUrl(it)
         }
         
-        // Extract title from multiple possible locations
-        val title = selectFirst("h2, h3, .title, .entry-title, .match-title")?.text()?.trim()
-            ?: selectFirst("a")?.attr("title")?.trim()
-            ?: selectFirst("img")?.attr("alt")?.trim()
-            ?: return null
-        
-        // Clean up title
-        val cleanTitle = title
-            .replace("مشاهدة", "")
-            .replace("مباراة", "")
-            .replace("بث مباشر", "")
-            .replace("اون لاين", "")
-            .replace("مترجم", "")
-            .trim()
-        
-        // Try to get poster
-        val poster = selectFirst("img")?.let { img ->
-            img.attr("src").ifBlank { img.attr("data-src") }
-        } ?: cleanTitle.getPosterFromMatch()
-        
-        // Check if it's a live match by URL pattern or text
-        val isLive = href.contains("/live/") || href.contains("live") || 
-                     title.contains("بث مباشر") || title.contains("مباشر")
-        
-        val displayTitle = if (isLive) "🔴 $cleanTitle" else cleanTitle
-        
-        return newMovieSearchResponse(displayTitle, href, TvType.Movie) {
+        return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = poster
         }
     }
     
     override val mainPage = mainPageOf(
-        "$mainUrl/category/matches/" to "المباريات الحية",
-        "$mainUrl/category/%d8%af%d9%88%d8%b1%d9%8a-%d8%a7%d8%a8%d8%b7%d8%a7%d9%84-%d8%a3%d9%88%d8%b1%d8%a8%d8%a7/" to "دوري أبطال أوروبا",
-        "$mainUrl/category/%d8%a7%d9%84%d8%af%d9%88%d8%b1%d9%8a-%d8%a7%d9%84%d8%a7%d9%86%d8%ac%d9%84%d9%8a%d8%b2%d9%8a/" to "الدوري الإنجليزي",
-        "$mainUrl/category/%d8%a7%d9%84%d8%af%d9%88%d8%b1%d9%8a-%d8%a7%d9%84%d8%a7%d8%b3%d8%a8%d8%a7%d9%86%d9%8a/" to "الدوري الإسباني",
-        "$mainUrl/category/%d8%a7%d9%84%d8%af%d9%88%d8%b1%d9%8a-%d8%a7%d9%84%d8%a7%d9%8a%d8%b7%d8%a7%d9%84%d9%8a/" to "الدوري الإيطالي",
-        "$mainUrl/category/%d8%a7%d9%84%d8%af%d9%88%d8%b1%d9%8a-%d8%a7%d9%84%d8%a7%d9%84%d9%85%d8%a7%d9%86%d9%8a/" to "الدوري الألماني",
-        "$mainUrl/category/%d8%a7%d9%84%d8%af%d9%88%d8%b1%d9%8a-%d8%a7%d9%84%d8%b3%d8%b9%d9%88%d8%af%d9%8a/" to "الدوري السعودي",
-        "$mainUrl/category/%d8%a7%d9%84%d8%af%d9%88%d8%b1%d9%8a-%d8%a7%d9%84%d9%85%d8%b5%d8%b1%d9%8a/" to "الدوري المصري",
-        "$mainUrl/category/%d9%83%d8%a3%d8%b3-%d8%a7%d9%84%d8%b9%d8%a7%d9%84%d9%85/" to "كأس العالم",
-        "$mainUrl/category/%d9%83%d8%a3%d8%b3-%d8%a7%d9%84%d8%a7%d9%85%d9%85-%d8%a7%d9%84%d8%a7%d9%81%d8%b1%d9%8a%d9%82%d9%8a%d8%a9/" to "كأس الأمم الأفريقية"
+        "$mainUrl/" to "مباريات اليوم",
+        "$mainUrl/matches-today/" to "المباريات الحية",
+        "$mainUrl/matches-yesterday/" to "مباريات الأمس",
+        "$mainUrl/matches-tomorrow/" to "مباريات الغد",
+        "$mainUrl/category/sports-news/" to "أخبار رياضية",
+        "$mainUrl/category/champions-league/" to "دوري أبطال أوروبا",
+        "$mainUrl/category/premier-league/" to "الدوري الإنجليزي",
+        "$mainUrl/category/la-liga/" to "الدوري الإسباني",
+        "$mainUrl/category/serie-a/" to "الدوري الإيطالي",
+        "$mainUrl/category/bundesliga/" to "الدوري الألماني",
+        "$mainUrl/category/saudi-league/" to "الدوري السعودي",
+        "$mainUrl/category/arab-cup/" to "كأس العرب"
     )
     
     override suspend fun getMainPage(
@@ -87,52 +97,40 @@ class KooraLite : MainAPI() {
         val url = if (page > 1) "${request.data}page/$page/" else request.data
         val document = app.get(url).document
         
-        // Try multiple selectors to find match items
-        val selectors = listOf(
-            ".post",
-            "article",
-            ".match-item",
-            ".item",
-            ".entry",
-            ".col-md-4",
-            ".col-lg-4",
-            ".col-sm-6"
-        )
+        val items = mutableListOf<SearchResponse>()
         
-        val matches = mutableListOf<SearchResponse>()
-        
-        for (selector in selectors) {
-            if (matches.isNotEmpty()) break
-            
-            document.select(selector).forEach { element ->
-                element.toSearchResponse()?.let { matches.add(it) }
+        // First, get live matches (only on main pages with matches)
+        if (request.data.contains("matches-") || request.data == "$mainUrl/") {
+            document.select(".AY_Match").forEach { match ->
+                match.toMatchSearchResponse()?.let { items.add(it) }
             }
         }
         
-        // Fallback: look for any links that might be matches
-        if (matches.isEmpty()) {
+        // If no matches found, get articles/posts
+        if (items.isEmpty()) {
+            document.select(".gr-item, article, .post").forEach { article ->
+                article.toArticleSearchResponse()?.let { items.add(it) }
+            }
+        }
+        
+        // Fallback: get any links that look like matches
+        if (items.isEmpty()) {
             document.select("a").forEach { link ->
                 val href = link.attr("href")
-                val title = link.text().trim()
+                val text = link.text().trim()
                 
-                if (href.contains("/match/") || href.contains("/live/") || 
-                    title.contains("مباراة") || title.contains("بث")) {
+                if (href.contains("/match/") || href.contains("stream-in.live") || 
+                    text.contains("مباراة") || text.contains("بث مباشر")) {
                     
-                    val cleanTitle = title.replace("مشاهدة", "").replace("مباراة", "").trim()
-                    if (cleanTitle.isNotBlank()) {
-                        val fullUrl = when {
-                            href.startsWith("http") -> href
-                            href.startsWith("/") -> "$mainUrl$href"
-                            else -> "$mainUrl/$href"
-                        }
-                        
-                        matches.add(newMovieSearchResponse(cleanTitle, fullUrl, TvType.Movie))
+                    val fullUrl = fixUrl(href)
+                    if (text.length > 3) {
+                        items.add(newMovieSearchResponse(text, fullUrl, TvType.Movie))
                     }
                 }
             }
         }
         
-        return newHomePageResponse(request.name, matches, hasNext = true)
+        return newHomePageResponse(request.name, items, hasNext = true)
     }
     
     override suspend fun search(query: String): List<SearchResponse> {
@@ -141,119 +139,133 @@ class KooraLite : MainAPI() {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val searchUrl = "$mainUrl/?s=$encodedQuery"
         
-        try {
+        return try {
             val document = app.get(searchUrl).document
             val results = mutableListOf<SearchResponse>()
             
-            document.select(".post, article, .search-result").forEach { element ->
-                element.toSearchResponse()?.let { results.add(it) }
+            // Try to find matches
+            document.select(".AY_Match").forEach { match ->
+                match.toMatchSearchResponse()?.let { results.add(it) }
             }
             
-            return results
+            // Try to find articles
+            document.select(".gr-item, .search-result, article").forEach { article ->
+                article.toArticleSearchResponse()?.let { results.add(it) }
+            }
+            
+            results
         } catch (e: Exception) {
-            return emptyList()
+            emptyList()
         }
     }
     
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
+        // Parse stored match data
+        val parts = url.split("|")
+        val actualUrl = parts[0]
+        val title = parts.getOrNull(1) ?: "مباراة كرة قدم"
+        val time = parts.getOrNull(2) ?: ""
+        val tournament = parts.getOrNull(3) ?: ""
+        val status = parts.getOrNull(4) ?: ""
+        val poster = parts.getOrNull(5)
+        val team1 = parts.getOrNull(6) ?: ""
+        val team2 = parts.getOrNull(7) ?: ""
         
-        // Extract title
-        val title = document.selectFirst("h1.entry-title, h1.post-title, h1, .title")?.text()?.trim()
-            ?: "مباراة كورة لايت"
+        val document = app.get(actualUrl).document
         
-        // Extract description/plot
-        val plotBuilder = StringBuilder()
-        
-        // Try to get match details
-        val matchDetails = document.select(".entry-content p, .post-content p, .description p, p")
-            .map { it.text().trim() }
-            .filter { it.isNotBlank() && !it.contains("function(") }
-            .take(3)
-        
-        if (matchDetails.isNotEmpty()) {
-            plotBuilder.append("تفاصيل المباراة:\n")
-            matchDetails.forEach { plotBuilder.append("• $it\n") }
-        }
-        
-        // Try to get teams
-        val teams = mutableListOf<String>()
-        document.select("h2, h3, strong").forEach { element ->
-            val text = element.text().trim()
-            if (text.contains(" ضد ") || text.contains(" vs ") || text.contains(" VS ")) {
-                teams.add(text)
+        // Build description
+        val description = buildString {
+            if (team1.isNotBlank() && team2.isNotBlank()) {
+                append("⚽ $team1 vs $team2\n")
+            }
+            
+            if (time.isNotBlank()) {
+                append("🕒 الوقت: $time\n")
+            }
+            
+            if (tournament.isNotBlank()) {
+                append("🏆 البطولة: $tournament\n")
+            }
+            
+            // Add status
+            when (status) {
+                "live" -> append("🔴 الحالة: البث مباشر الآن\n")
+                "finished" -> append("✅ الحالة: انتهت المباراة\n")
+                else -> append("⏳ الحالة: قادمة\n")
+            }
+            
+            // Try to get additional info from page
+            val pageContent = document.select(".entry-content, .post-content, .article-content")
+            if (pageContent.isNotEmpty()) {
+                append("\nمعلومات المباراة:\n")
+                pageContent.select("p").take(3).forEach { p ->
+                    val text = p.text().trim()
+                    if (text.isNotBlank() && text.length > 20) {
+                        append("• $text\n")
+                    }
+                }
             }
         }
         
-        if (teams.isNotEmpty()) {
-            plotBuilder.append("\nالفريقان:\n")
-            teams.take(2).forEach { plotBuilder.append("⚽ $it\n") }
-        }
+        // Look for stream links
+        val streamLinks = mutableSetOf<String>()
         
-        // Try to get time/date
-        val timeElement = document.selectFirst(".match-time, .time, .date, .post-date")
-        timeElement?.let {
-            plotBuilder.append("\nالوقت: ${it.text().trim()}\n")
-        }
-        
-        // Try to get poster
-        val poster = document.selectFirst("img.wp-post-image, img.post-thumbnail, img.attachment-post-thumbnail")?.attr("src")
-            ?: document.selectFirst("meta[property='og:image']")?.attr("content")
-            ?: title.getPosterFromMatch()
-        
-        // Look for stream links in the page
-        val streamLinks = document.select("iframe[src], embed[src], video source[src]")
-            .mapNotNull {
-                it.attr("src").ifBlank { it.attr("data-src") }
+        // Method 1: Look for iframes in the page
+        document.select("iframe[src]").forEach { iframe ->
+            val src = iframe.attr("src")
+            if (src.isNotBlank() && src.contains("stream")) {
+                streamLinks.add(src)
             }
-            .filter { it.isNotBlank() }
-            .distinct()
+        }
         
-        // Also look for links with streaming keywords
-        document.select("a[href*='stream'], a[href*='live'], a[href*='watch']").forEach { link ->
+        // Method 2: Check if URL is already a stream link
+        if (actualUrl.contains("stream-in.live") || actualUrl.contains("stream")) {
+            streamLinks.add(actualUrl)
+        }
+        
+        // Method 3: Look for video elements
+        document.select("video source[src]").forEach { source ->
+            val src = source.attr("src")
+            if (src.isNotBlank()) {
+                streamLinks.add(src)
+            }
+        }
+        
+        // Method 4: Look for links with streaming keywords
+        document.select("a[href*='stream'], a[href*='watch'], a[href*='live']").forEach { link ->
             val href = link.attr("href")
             if (href.isNotBlank() && href.startsWith("http")) {
-                if (href !in streamLinks) {
-                    streamLinks.toMutableList().add(href)
-                }
+                streamLinks.add(href)
             }
         }
         
         val data = if (streamLinks.isNotEmpty()) {
             streamLinks.joinToString("|||")
         } else {
-            url // Fallback to original URL
+            actualUrl
         }
         
         return newMovieLoadResponse(title, url, TvType.Movie, data) {
             this.posterUrl = poster
-            this.plot = plotBuilder.toString().takeIf { it.isNotBlank() }
+            this.plot = description.trim()
             
-            // Add tags based on content
+            // Add tags
             val tags = mutableListOf("كرة قدم", "رياضة", "مباراة")
-            if (title.contains("بث مباشر") || title.contains("مباشر")) {
+            if (tournament.isNotBlank()) {
+                tags.add(tournament)
+            }
+            if (status == "live") {
                 tags.add("بث مباشر")
-            }
-            if (title.contains("دوري")) {
-                tags.add("دوري")
-            }
-            if (title.contains("كأس")) {
-                tags.add("كأس")
             }
             this.tags = tags
             
-            // Add some recommendations (other matches on the site)
-            val recommendations = document.select(".related-posts a, .widget a").mapNotNull { link ->
+            // Add recommendations
+            val recommendations = document.select(".related-posts a, .widget a, .gr-item a").mapNotNull { link ->
                 val recTitle = link.text().trim()
                 val recHref = link.attr("href")
                 
                 if (recTitle.isNotBlank() && recHref.isNotBlank() && recTitle.length > 3) {
-                    val fullUrl = when {
-                        recHref.startsWith("http") -> recHref
-                        recHref.startsWith("/") -> "$mainUrl$recHref"
-                        else -> "$mainUrl/$recHref"
-                    }
-                    
+                    val fullUrl = fixUrl(recHref)
                     newMovieSearchResponse(recTitle, fullUrl, TvType.Movie)
                 } else null
             }.take(5)
@@ -280,7 +292,7 @@ class KooraLite : MainAPI() {
                     foundLinks = true
                 } catch (e: Exception) {
                     // Try direct extraction
-                    tryExtractDirectLinks(streamUrl, callback)
+                    tryExtractDirectLink(streamUrl, callback)
                 }
             }
         } else {
@@ -288,7 +300,7 @@ class KooraLite : MainAPI() {
             try {
                 val doc = app.get(data).document
                 
-                // Method 1: Look for iframes
+                // Look for iframes
                 doc.select("iframe[src]").forEach { iframe ->
                     val src = iframe.attr("src")
                     if (src.isNotBlank()) {
@@ -297,12 +309,10 @@ class KooraLite : MainAPI() {
                     }
                 }
                 
-                // Method 2: Look for video elements
+                // Look for direct video links
                 doc.select("video source[src]").forEach { source ->
                     val videoUrl = source.attr("src")
                     if (videoUrl.isNotBlank()) {
-                        val quality = Qualities.Unknown.value
-                        
                         callback.invoke(
                             newExtractorLink(
                                 name,
@@ -311,47 +321,32 @@ class KooraLite : MainAPI() {
                                 if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                             ) {
                                 this.referer = data
-                                this.quality = quality
+                                this.quality = Qualities.Unknown.value
                             }
                         )
                         foundLinks = true
                     }
                 }
                 
-                // Method 3: Look for streaming scripts
+                // Look for streaming scripts
                 doc.select("script").forEach { script ->
                     val scriptText = script.html()
                     
-                    // Look for common streaming URLs in scripts
+                    // Common streaming URL patterns
                     val patterns = listOf(
                         Regex("""(https?://[^\s'"]*\.m3u8[^\s'"]*)"""),
-                        Regex("""src\s*[:=]\s*['"](https?://[^'"]+)['"]"""),
-                        Regex("""file\s*[:=]\s*['"](https?://[^'"]+)['"]"""),
-                        Regex("""['"](https?://[^'"]*stream[^'"]*)['"]""")
+                        Regex("""['"](https?://[^'"]*stream[^'"]*)['"]"""),
+                        Regex("""src\s*[:=]\s*['"](https?://[^'"]+)['"]""")
                     )
                     
                     patterns.forEach { pattern ->
                         pattern.findAll(scriptText).forEach { match ->
                             val url = match.groupValues[1]
-                            if (url.isNotBlank() && (url.contains("m3u8") || url.contains("mp4") || url.contains("stream"))) {
+                            if (url.isNotBlank() && (url.contains("m3u8") || url.contains("stream"))) {
                                 loadExtractor(url, data, subtitleCallback, callback)
                                 foundLinks = true
                             }
                         }
-                    }
-                }
-                
-                // Method 4: Look for links with streaming keywords
-                doc.select("a").forEach { link ->
-                    val href = link.attr("href")
-                    val text = link.text().lowercase()
-                    
-                    if (href.isNotBlank() && href.startsWith("http") &&
-                        (text.contains("شاهد") || text.contains("بث") || text.contains("مشاهدة") || 
-                         text.contains("stream") || text.contains("watch") || text.contains("live"))) {
-                        
-                        loadExtractor(href, data, subtitleCallback, callback)
-                        foundLinks = true
                     }
                 }
                 
@@ -360,43 +355,23 @@ class KooraLite : MainAPI() {
             }
         }
         
-        // Fallback: try to find stream on common football streaming sites
-        if (!foundLinks) {
+        // If still no links found, check if URL is from stream-in.live
+        if (!foundLinks && (data.contains("stream-in.live") || data.contains("/2025/"))) {
             try {
-                // Common football streaming patterns
-                val commonStreamPatterns = listOf(
-                    "ripple.is",
-                    "dubz.co",
-                    "streamtape.com",
-                    "streamwish.to",
-                    "vidhide.com",
-                    "vidoza.net"
-                )
-                
-                // Check if URL matches any common pattern
-                commonStreamPatterns.forEach { pattern ->
-                    if (data.contains(pattern)) {
-                        loadExtractor(data, mainUrl, subtitleCallback, callback)
-                        foundLinks = true
-                        return@forEach
-                    }
-                }
+                loadExtractor(data, mainUrl, subtitleCallback, callback)
+                foundLinks = true
             } catch (e: Exception) {
-                // Fallback failed
+                // Ignore
             }
         }
         
         return foundLinks
     }
     
-    private suspend fun tryExtractDirectLinks(url: String, callback: (ExtractorLink) -> Unit) {
+    private suspend fun tryExtractDirectLink(url: String, callback: (ExtractorLink) -> Unit) {
         try {
-            val response = app.get(url)
-            val contentType = response.headers["content-type"] ?: ""
-            
-            if (contentType.contains("video") || contentType.contains("m3u8") || 
-                contentType.contains("mp4") || url.contains(".m3u8") || url.contains(".mp4")) {
-                
+            // Check if it's a direct video URL
+            if (url.contains(".m3u8") || url.contains(".mp4") || url.contains(".mkv")) {
                 callback.invoke(
                     newExtractorLink(
                         name,
@@ -411,6 +386,16 @@ class KooraLite : MainAPI() {
             }
         } catch (e: Exception) {
             // Ignore errors
+        }
+    }
+    
+    private fun fixUrl(url: String): String {
+        return when {
+            url.isBlank() -> ""
+            url.startsWith("http") -> url
+            url.startsWith("//") -> "https:$url"
+            url.startsWith("/") -> "$mainUrl$url"
+            else -> "$mainUrl/$url"
         }
     }
 }
