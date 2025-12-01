@@ -229,7 +229,9 @@ class KooraLite : MainAPI() {
             // Try to extract stream count from page
             val streamCount = document.select(".video-serv a").size
             if (streamCount > 0) {
-                this.quality = Qualities.Unknown.value
+                // Note: quality field is not available in the builder
+                // Remove this line or use appropriate field
+                // this.quality = Qualities.Unknown.value
             }
         }
     }
@@ -263,15 +265,14 @@ class KooraLite : MainAPI() {
                 val videoUrl = source.attr("src")
                 if (videoUrl.isNotBlank()) {
                     callback.invoke(
-                        newExtractorLink(
-                            name,
+                        ExtractorLink(
+                            this.name,
                             "$name - بث مباشر",
                             videoUrl,
-                            if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = data
-                            this.quality = Qualities.Unknown.value
-                        }
+                            mainUrl,
+                            if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
+                            quality = Qualities.Unknown.value
+                        )
                     )
                     foundLinks = true
                 }
@@ -339,15 +340,14 @@ class KooraLite : MainAPI() {
                 val videoUrl = source.attr("src")
                 if (videoUrl.isNotBlank()) {
                     callback.invoke(
-                        newExtractorLink(
-                            name,
+                        ExtractorLink(
+                            this.name,
                             "$name - بث مباشر",
                             videoUrl,
-                            if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = iframeSrc
-                            this.quality = Qualities.Unknown.value
-                        }
+                            iframeSrc,
+                            if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
+                            quality = Qualities.Unknown.value
+                        )
                     )
                     foundLinks = true
                 }
@@ -426,27 +426,6 @@ class KooraLite : MainAPI() {
         }
         
         return foundLinks
-    }
-    
-    private suspend fun tryExtractDirectLink(url: String, callback: (ExtractorLink) -> Unit) {
-        try {
-            // Check if it's a direct video URL
-            if (url.contains(".m3u8") || url.contains(".mp4") || url.contains(".mkv")) {
-                callback.invoke(
-                    newExtractorLink(
-                        name,
-                        "$name - بث مباشر",
-                        url,
-                        if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
-        } catch (e: Exception) {
-            // Ignore errors
-        }
     }
     
     private fun fixUrl(url: String): String {
