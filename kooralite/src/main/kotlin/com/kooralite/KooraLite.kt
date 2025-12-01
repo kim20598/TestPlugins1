@@ -4,16 +4,13 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import java.text.SimpleDateFormat
-import java.util.*
-import java.util.concurrent.TimeUnit
 
 class KooraLite : MainAPI() {
     override var mainUrl = "https://www.kooralite.com"
     override var name = "KooraLite - كورة لايت"
     override var lang = "ar"
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.LiveTV)
+    override val supportedTypes = setOf(TvType.Movie) // Using Movie type instead of LiveTV
     
     // Store match data
     data class MatchInfo(
@@ -72,7 +69,7 @@ class KooraLite : MainAPI() {
         val matchData = "$title|$time|$league|${status.name}|$poster"
         val dataUrl = "$href|$matchData"
         
-        return newMovieSearchResponse(enhancedTitle, dataUrl, TvType.LiveTV) {
+        return newMovieSearchResponse(enhancedTitle, dataUrl, TvType.Movie) {
             this.posterUrl = poster
         }
     }
@@ -90,10 +87,10 @@ class KooraLite : MainAPI() {
         "$mainUrl/league/saudi-league" to "الدوري السعودي",
         "$mainUrl/league/egyptian-league" to "الدوري المصري",
         "$mainUrl/league/champions-league" to "دوري أبطال أوروبا",
-        "$mainUrl/league/europa-league" -> "الدوري الأوروبي",
-        "$mainUrl/league/world-cup" -> "كأس العالم",
-        "$mainUrl/league/african-cup" -> "كأس الأمم الأفريقية",
-        "$mainUrl/league/asian-cup" -> "كأس آسيا"
+        "$mainUrl/league/europa-league" to "الدوري الأوروبي",
+        "$mainUrl/league/world-cup" to "كأس العالم",
+        "$mainUrl/league/african-cup" to "كأس الأمم الأفريقية",
+        "$mainUrl/league/asian-cup" to "كأس آسيا"
     )
     
     override suspend fun getMainPage(
@@ -176,18 +173,15 @@ class KooraLite : MainAPI() {
         return newMovieLoadResponse(
             title,
             url,
-            TvType.LiveTV,
+            TvType.Movie,
             episodeData
         ) {
             this.posterUrl = poster
             this.plot = description.trim()
             
             // Add relevant metadata
-            when (status) {
-                "LIVE" -> this.showStatus = ShowStatus.Ongoing
-                "FINISHED" -> this.showStatus = ShowStatus.Completed
-                else -> this.showStatus = ShowStatus.Completed
-            }
+            // Note: Using TvType.Movie doesn't have showStatus property
+            // If you need status, you might need to create a custom LoadResponse
             
             // Add tags for filtering
             this.tags = listOf("كرة قدم", "مباراة", "رياضة", "بث مباشر", league)
@@ -197,7 +191,7 @@ class KooraLite : MainAPI() {
                 val recTitle = related.text().trim()
                 val recUrl = related.attr("href")
                 if (recTitle.isNotBlank() && recUrl.isNotBlank()) {
-                    newMovieSearchResponse(recTitle, recUrl, TvType.LiveTV) {
+                    newMovieSearchResponse(recTitle, recUrl, TvType.Movie) {
                         this.posterUrl = poster
                     }
                 } else null
