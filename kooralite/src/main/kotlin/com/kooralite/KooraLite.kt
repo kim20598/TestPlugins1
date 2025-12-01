@@ -225,14 +225,6 @@ class KooraLite : MainAPI() {
                 tags.add("بث مباشر")
             }
             this.tags = tags
-            
-            // Try to extract stream count from page
-            val streamCount = document.select(".video-serv a").size
-            if (streamCount > 0) {
-                // Note: quality field is not available in the builder
-                // Remove this line or use appropriate field
-                // this.quality = Qualities.Unknown.value
-            }
         }
     }
     
@@ -269,9 +261,10 @@ class KooraLite : MainAPI() {
                             this.name,
                             "$name - بث مباشر",
                             videoUrl,
-                            mainUrl,
-                            if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
-                            quality = Qualities.Unknown.value
+                            data,
+                            Qualities.Unknown.value,
+                            videoUrl.contains(".m3u8"),
+                            headers = mapOf("Referer" to data)
                         )
                     )
                     foundLinks = true
@@ -345,8 +338,9 @@ class KooraLite : MainAPI() {
                             "$name - بث مباشر",
                             videoUrl,
                             iframeSrc,
-                            if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
-                            quality = Qualities.Unknown.value
+                            Qualities.Unknown.value,
+                            videoUrl.contains(".m3u8"),
+                            headers = mapOf("Referer" to iframeSrc)
                         )
                     )
                     foundLinks = true
