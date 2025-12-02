@@ -16,65 +16,67 @@ class KooraLite : MainAPI() {
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
-    // Debug function to log HTML structure
-    private fun debugHtml(document: Element, pageName: String) {
-        println("=== DEBUG $pageName ===")
-        println("Page URL: ${document.location()}")
-        println("--- Top level divs ---")
-        document.select("div").take(20).forEachIndexed { index, div ->
-            val classes = div.classNames().joinToString(" ")
-            val id = div.id()
-            if (classes.isNotBlank() || id.isNotBlank()) {
-                println("Div $index: classes='$classes' id='$id'")
-            }
-        }
-        println("--- Articles ---")
-        document.select("article").forEachIndexed { index, article ->
-            println("Article $index: ${article.className()}")
-        }
-        println("--- All links ---")
-        document.select("a").take(30).forEachIndexed { index, link ->
-            val href = link.attr("href")
-            val text = link.text().trim()
-            if (text.isNotBlank() && href.contains("/match/")) {
-                println("Link $index: '$text' -> $href")
-            }
-        }
-        println("=== END DEBUG ===")
-    }
-    
-    private fun Element.toSearchResponse(): SearchResponse? {
-        // Try multiple possible selectors for matches
+    // Match item extraction
+    private fun Element.toMatchSearchResponse(): SearchResponse? {
         val link = selectFirst("a")?.attr("href") ?: return null
         val href = fixUrl(link)
         
-        // Skip non-match links
-        if (!href.contains("/match/") && !href.contains("stream-in.live")) {
-            return null
+        // Skip if not a match link
+        if (!href.contains("/match/") && !href.contains("stream-in.live")) return null
+        
+        // Get team names
+        val team1 = selectFirst(".MT_Team.TM1 .TM_Name")?.text()?.trim() ?: return null
+        val team2 = selectFirst(".MT_Team.TM2 .TM_Name")?.text()?.trim() ?: return null
+        
+        val title = "$team1 vs $team2"
+        
+        // Get match status
+        val statusClass = classNames().firstOrNull { 
+            it in listOf("live", "finished", "comming-soon", "not-started") 
+        } ?: ""
+        
+        val statusText = when (statusClass) {
+            "live" -> "🔴 مباشر"
+            "finished" -> "✅ انتهت"
+            "comming-soon" -> "⏳ قادمة"
+            else -> "⚽"
         }
         
-        // Try to extract title from various elements
-        val title = selectFirst("h3, h2, .title, .entry-title, .match-title, .team-name")?.text()?.trim()
-            ?: ownText().trim()
-            ?: attr("title").trim()
+        // Get match time
+        val time = selectFirst(".MT_Time")?.text()?.trim() ?: ""
         
-        if (title.isBlank()) return null
+        // Get tournament/league
+        val tournament = selectFirst(".MT_Info li:last-child span")?.text()?.trim() ?: ""
         
-        // Try to extract poster/image
-        val poster = selectFirst("img")?.let { img ->
-            img.attr("data-src").ifBlank { img.attr("src") }
-        }?.takeIf { it.isNotBlank() }?.let { fixUrl(it) }
-            ?: selectFirst(".logo, .team-logo, .thumbnail")?.attr("src")?.let { fixUrl(it) }
+        // Get team logos
+        val team1Logo = selectFirst(".TM1 img")?.attr("data-src")?.let { fixUrl(it) }
+        val team2Logo = selectFirst(".TM2 img")?.attr("data-src")?.let { fixUrl(it) }
         
-        // Check if it's a live match
-        val isLive = text().contains("مباشر", true) || 
-                     classNames().any { it.contains("live", true) } ||
-                     href.contains("live", true)
+        // Choose poster (team1 logo first)
+        val poster = team1Logo ?: team2Logo
         
-        // Create enhanced title
-        val enhancedTitle = if (isLive) "🔴 $title" else title
+        // Enhanced title
+        val enhancedTitle = buildString {
+            if (statusText.isNotBlank()) append("$statusText ")
+            append(title)
+            if (time.isNotBlank()) append(" ($time)")
+        }
         
         return newMovieSearchResponse(enhancedTitle, href, TvType.Movie) {
+            this.posterUrl = poster
+        }
+    }
+    
+    // Article item extraction
+    private fun Element.toArticleSearchResponse(): SearchResponse? {
+        val link = selectFirst("a")?.attr("href") ?: return null
+        val href = fixUrl(link)
+        
+        val title = selectFirst(".gr-title, h3")?.text()?.trim() ?: return null
+        
+        val poster = selectFirst(".gr-img")?.attr("data-src")?.let { fixUrl(it) }
+        
+        return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = poster
         }
     }
@@ -82,54 +84,42 @@ class KooraLite : MainAPI() {
     override val mainPage = mainPageOf(
         "$mainUrl/" to "الرئيسية",
         "$mainUrl/matches-today/" to "مباريات اليوم",
-        "$mainUrl/matches-live/" to "المباريات الحية",
+        "$mainUrl/matches-yesterday/" to "مباريات الأمس",
+        "$mainUrl/matches-tomorrow/" to "مباريات الغد",
+        "$mainUrl/category/sports-news/" to "أخبار رياضية",
+        "$mainUrl/category/champions-league/" to "دوري أبطال أوروبا",
         "$mainUrl/category/premier-league/" to "الدوري الإنجليزي",
         "$mainUrl/category/la-liga/" to "الدوري الإسباني",
         "$mainUrl/category/serie-a/" to "الدوري الإيطالي",
         "$mainUrl/category/bundesliga/" to "الدوري الألماني",
-        "$mainUrl/category/champions-league/" to "دوري الأبطال",
-        "$mainUrl/category/europa-league/" to "الدوري الأوروبي",
-        "$mainUrl/category/world-cup/" to "كأس العالم"
+        "$mainUrl/category/saudi-league/" to "الدوري السعودي",
+        "$mainUrl/category/arab-cup/" to "كأس العرب"
     )
     
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val url = if (page > 1) {
-            if (request.data.contains("?")) "${request.data}&page=$page" 
-            else "${request.data}page/$page/"
-        } else {
-            request.data
-        }
-        
-        println("=== Loading URL: $url ===")
+        val url = if (page > 1) "${request.data}page/$page/" else request.data
         val document = app.get(url, headers = getHeaders()).document
-        
-        // Debug the HTML structure
-        debugHtml(document, request.name)
         
         val items = mutableListOf<SearchResponse>()
         
-        // Method 1: Look for any divs that might contain match info
-        document.select("div").forEach { div ->
-            // Check if this div looks like it contains match info
-            val hasMatchLink = div.select("a[href*='/match/']").isNotEmpty() ||
-                              div.select("a[href*='stream-in.live']").isNotEmpty()
-            
-            if (hasMatchLink) {
-                div.toSearchResponse()?.let { items.add(it) }
+        // For match pages, extract matches
+        if (request.data.contains("matches-") || request.data == "$mainUrl/") {
+            document.select(".AY_Match").forEach { match ->
+                match.toMatchSearchResponse()?.let { items.add(it) }
             }
         }
         
-        // Method 2: Look for articles
-        if (items.isEmpty()) {
-            document.select("article, .post, .item, .match-item").forEach { element ->
-                element.toSearchResponse()?.let { items.add(it) }
+        // For news/category pages, extract articles
+        if (items.isEmpty() || request.data.contains("category/")) {
+            document.select(".gr-item").forEach { article ->
+                article.toArticleSearchResponse()?.let { items.add(it) }
             }
         }
         
-        // Method 3: Direct links
+        // Fallback: direct links
         if (items.isEmpty()) {
             document.select("a[href*='/match/'], a[href*='stream-in.live']").forEach { link ->
                 val href = link.attr("href")
@@ -142,18 +132,10 @@ class KooraLite : MainAPI() {
             }
         }
         
-        // Remove duplicates
-        val uniqueItems = items.distinctBy { it.url }
-        
-        println("=== Found ${uniqueItems.size} items for ${request.name} ===")
-        uniqueItems.forEachIndexed { index, item ->
-            println("Item $index: ${item.name} -> ${item.url}")
-        }
-        
         return newHomePageResponse(
             request.name, 
-            uniqueItems, 
-            hasNext = uniqueItems.isNotEmpty() && document.select("a.next, .pagination a").isNotEmpty()
+            items.distinctBy { it.url },
+            hasNext = items.isNotEmpty() && document.select("a.next, .pagination a").isNotEmpty()
         )
     }
     
@@ -163,18 +145,21 @@ class KooraLite : MainAPI() {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val searchUrl = "$mainUrl/?s=$encodedQuery"
         
-        println("=== Searching for: $query ===")
-        
         return try {
             val document = app.get(searchUrl, headers = getHeaders()).document
             val results = mutableListOf<SearchResponse>()
             
-            // Look for matches in search results
-            document.select("article, .post, .search-result, div").forEach { element ->
-                element.toSearchResponse()?.let { results.add(it) }
+            // Look for matches
+            document.select(".AY_Match").forEach { match ->
+                match.toMatchSearchResponse()?.let { results.add(it) }
             }
             
-            // Also look for direct links
+            // Look for articles
+            document.select(".gr-item").forEach { article ->
+                article.toArticleSearchResponse()?.let { results.add(it) }
+            }
+            
+            // Direct links fallback
             document.select("a[href*='/match/']").forEach { link ->
                 val href = link.attr("href")
                 val text = link.text().trim()
@@ -185,57 +170,54 @@ class KooraLite : MainAPI() {
                 }
             }
             
-            println("=== Found ${results.size} search results ===")
             results.distinctBy { it.url }
         } catch (e: Exception) {
-            println("=== Search error: ${e.message} ===")
             emptyList()
         }
     }
     
     override suspend fun load(url: String): LoadResponse {
-        println("=== Loading match page: $url ===")
-        
         val document = app.get(url, headers = getHeaders()).document
         
         // Extract title
         val title = document.selectFirst("h1.entry-title, h1.title, h1")?.text()?.trim()
-            ?: document.selectFirst("title")?.text()?.trim()
             ?: "مباراة كرة قدم"
         
-        // Extract poster/image
+        // Extract poster
         val poster = document.selectFirst("meta[property='og:image']")?.attr("content")?.let { fixUrl(it) }
-            ?: document.selectFirst("img[src*='logo'], img[src*='team']")?.attr("src")?.let { fixUrl(it) }
+            ?: document.selectFirst("img[src*='logo']")?.attr("src")?.let { fixUrl(it) }
         
-        // Extract description/plot
+        // Extract description from match info
         val description = buildString {
-            // Try to get match info
-            val matchInfo = document.select(".match-info, .match-details, table")
-            if (matchInfo.isNotEmpty()) {
+            // Extract match details from table
+            val matchTable = document.select("table.table-bordered")
+            if (matchTable.isNotEmpty()) {
                 append("📋 معلومات المباراة:\n")
-                matchInfo.select("tr").forEach { row ->
-                    val label = row.select("th, .label").text().trim()
-                    val value = row.select("td, .value").text().trim()
-                    if (label.isNotBlank() && value.isNotBlank()) {
-                        append("• $label: $value\n")
+                
+                matchTable.select("tr").forEach { row ->
+                    val header = row.select("th").text().trim()
+                    val value = row.select("td").text().trim()
+                    
+                    if (header.isNotBlank() && value.isNotBlank()) {
+                        append("• $header: $value\n")
                     }
                 }
             }
             
-            // Add stream servers if available
-            val servers = document.select(".servers, .stream-links, .quality-options")
+            // Add stream servers
+            val servers = document.select(".video-serv a")
             if (servers.isNotEmpty()) {
                 append("\n📡 السيرفرات المتاحة:\n")
-                servers.select("a, button").forEachIndexed { index, server ->
-                    val serverText = server.text().trim()
-                    if (serverText.isNotBlank()) {
-                        append("• $serverText\n")
+                servers.forEachIndexed { index, server ->
+                    val serverName = server.text().trim()
+                    if (serverName.isNotBlank()) {
+                        append("• $serverName\n")
                     }
                 }
             }
         }
         
-        // Extract stream links from the page
+        // Extract stream links
         val streamLinks = mutableListOf<String>()
         
         // Look for iframes
@@ -246,23 +228,9 @@ class KooraLite : MainAPI() {
             }
         }
         
-        // Look for streaming scripts
-        document.select("script").forEach { script ->
-            val scriptText = script.html()
-            // Look for m3u8 or stream URLs
-            Regex("""['"](https?://[^'"]*\.m3u8[^'"]*)['"]""").findAll(scriptText).forEach { match ->
-                val url = match.groupValues[1]
-                if (url.isNotBlank()) {
-                    streamLinks.add(url)
-                }
-            }
-            
-            Regex("""['"](https?://[^'"]*stream[^'"]*)['"]""").findAll(scriptText).forEach { match ->
-                val url = match.groupValues[1]
-                if (url.isNotBlank()) {
-                    streamLinks.add(url)
-                }
-            }
+        // Look for direct stream-in.live links
+        if (url.contains("stream-in.live")) {
+            streamLinks.add(url)
         }
         
         val data = if (streamLinks.isNotEmpty()) {
@@ -271,12 +239,23 @@ class KooraLite : MainAPI() {
             url
         }
         
-        println("=== Loaded match: $title, found ${streamLinks.size} stream links ===")
-        
         return newMovieLoadResponse(title, url, TvType.Movie, data) {
             this.posterUrl = poster
             this.plot = description.ifBlank { "مباراة كرة قدم مباشرة" }
             this.tags = listOf("كرة قدم", "رياضة", "بث مباشر")
+            
+            // Recommendations
+            val recommendations = document.select(".related-posts a, .widget a")
+                .mapNotNull { link ->
+                    val recTitle = link.text().trim()
+                    val recHref = link.attr("href")
+                    
+                    if (recTitle.isNotBlank() && recHref.isNotBlank()) {
+                        newMovieSearchResponse(recTitle, fixUrl(recHref), TvType.Movie)
+                    } else null
+                }.take(5)
+            
+            this.recommendations = recommendations
         }
     }
     
@@ -288,24 +267,15 @@ class KooraLite : MainAPI() {
     ): Boolean {
         var foundLinks = false
         
-        println("=== Loading links from data ===")
-        
         // Check if data contains multiple stream links
         if (data.contains("|||")) {
             val streamLinks = data.split("|||").filter { it.isNotBlank() }
             
-            println("Found ${streamLinks.size} stream links in data")
-            
-            streamLinks.forEachIndexed { index, streamUrl ->
-                println("Processing stream link $index: $streamUrl")
-                
+            streamLinks.forEach { streamUrl ->
                 try {
                     loadExtractor(streamUrl, mainUrl, subtitleCallback, callback)
                     foundLinks = true
-                    println("Successfully loaded extractor for: $streamUrl")
                 } catch (e: Exception) {
-                    println("Extractor failed for $streamUrl: ${e.message}")
-                    
                     // If extractor fails, check if it's a direct video URL
                     if (streamUrl.contains(".m3u8") || streamUrl.contains(".mp4")) {
                         val type = if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
@@ -321,32 +291,27 @@ class KooraLite : MainAPI() {
                             }
                         )
                         foundLinks = true
-                        println("Added direct link: $streamUrl")
                     }
                 }
             }
         } else {
-            // Single URL - try to extract from the page
-            println("Single URL mode, loading: $data")
-            
+            // Single URL - load the page and extract streams
             try {
                 val doc = app.get(data, headers = getHeaders()).document
                 
-                // Look for iframes
+                // Look for iframes (common for sports streams)
                 doc.select("iframe[src]").forEach { iframe ->
                     val src = iframe.attr("src").trim()
                     if (src.isNotBlank()) {
-                        println("Found iframe: $src")
                         loadExtractor(src, data, subtitleCallback, callback)
                         foundLinks = true
                     }
                 }
                 
-                // Look for direct video elements
+                // Look for video elements
                 doc.select("video source[src], video[src]").forEach { video ->
                     val src = video.attr("src").trim()
                     if (src.isNotBlank() && (src.contains(".m3u8") || src.contains(".mp4"))) {
-                        println("Found direct video: $src")
                         val type = if (src.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                         callback.invoke(
                             newExtractorLink(
@@ -363,12 +328,42 @@ class KooraLite : MainAPI() {
                     }
                 }
                 
+                // Look for streaming scripts
+                doc.select("script").forEach { script ->
+                    val scriptText = script.html()
+                    
+                    // Look for m3u8 URLs
+                    Regex("""['"](https?://[^'"]*\.m3u8[^'"]*)['"]""").findAll(scriptText).forEach { match ->
+                        val url = match.groupValues[1]
+                        if (url.isNotBlank()) {
+                            loadExtractor(url, data, subtitleCallback, callback)
+                            foundLinks = true
+                        }
+                    }
+                    
+                    // Look for stream URLs
+                    Regex("""['"](https?://[^'"]*stream[^'"]*)['"]""").findAll(scriptText).forEach { match ->
+                        val url = match.groupValues[1]
+                        if (url.isNotBlank()) {
+                            loadExtractor(url, data, subtitleCallback, callback)
+                            foundLinks = true
+                        }
+                    }
+                }
+                
             } catch (e: Exception) {
-                println("Error loading page: ${e.message}")
+                // If page loading fails, try the URL directly if it looks like a stream
+                if (data.contains("stream") || data.contains("m3u8")) {
+                    try {
+                        loadExtractor(data, mainUrl, subtitleCallback, callback)
+                        foundLinks = true
+                    } catch (e: Exception) {
+                        // Ignore
+                    }
+                }
             }
         }
         
-        println("=== Finished loading links, found: $foundLinks ===")
         return foundLinks
     }
     
@@ -380,7 +375,10 @@ class KooraLite : MainAPI() {
             "Accept-Encoding" to "gzip, deflate, br",
             "Connection" to "keep-alive",
             "Upgrade-Insecure-Requests" to "1",
-            "Referer" to mainUrl
+            "Referer" to mainUrl,
+            "Sec-Fetch-Dest" to "document",
+            "Sec-Fetch-Mode" to "navigate",
+            "Sec-Fetch-Site" to "same-origin"
         )
     }
     
