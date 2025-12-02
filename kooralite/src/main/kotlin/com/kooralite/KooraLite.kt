@@ -194,16 +194,42 @@ class KooraLite : MainAPI() {
                 else -> append("⏳ الحالة: قادمة\n")
             }
             
-            // Try to get additional info from page
-            val pageContent = document.select(".entry-content, .post-content, .article-content")
-            if (pageContent.isNotEmpty()) {
-                append("\nمعلومات المباراة:\n")
-                pageContent.select("p").take(3).forEach { p ->
-                    val text = p.text().trim()
-                    if (text.isNotBlank() && text.length > 20) {
-                        append("• $text\n")
+            // NEW: Extract match info from table
+            val matchTable = document.select("table.table-bordered")
+            if (matchTable.isNotEmpty()) {
+                append("\n📋 بطاقة المباراة:\n")
+                
+                // Extract table rows
+                matchTable.select("tr").forEach { row ->
+                    val header = row.select("th").text().trim()
+                    val value = row.select("td").text().trim()
+                    
+                    if (header.isNotBlank() && value.isNotBlank()) {
+                        when (header) {
+                            "البطولة" -> append("🏆 $header: $value\n")
+                            "اسم القناة" -> append("📺 $header: $value\n")
+                            "تاريخ المباراة" -> append("📅 $header: $value\n")
+                            "توقيت المباراة" -> append("⏰ $header: $value\n")
+                            "المعلق" -> append("🎙️ $header: $value\n")
+                            "نتيجة المباراة" -> append("📊 $header: $value\n")
+                            else -> append("• $header: $value\n")
+                        }
                     }
                 }
+            }
+            
+            // Try to find stream quality/links info
+            document.select(".video-serv a").forEach { streamLink ->
+                val streamName = streamLink.text().trim()
+                if (streamName.isNotBlank()) {
+                    append("📡 $streamName\n")
+                }
+            }
+            
+            // Add server information if available
+            val servers = document.select(".video-serv a")
+            if (servers.isNotEmpty()) {
+                append("\n🔗 السيرفرات المتاحة: ${servers.size}\n")
             }
         }
         
@@ -249,14 +275,51 @@ class KooraLite : MainAPI() {
             this.posterUrl = poster
             this.plot = description.trim()
             
-            // Add tags
+            // Add tags - extract from table if available
             val tags = mutableListOf("كرة قدم", "رياضة", "مباراة")
-            if (tournament.isNotBlank()) {
+            
+            // Try to extract tournament from table
+            val matchTable = document.select("table.table-bordered")
+            var extractedTournament = tournament
+            
+            if (matchTable.isNotEmpty()) {
+                matchTable.select("tr").forEach { row ->
+                    val header = row.select("th").text().trim()
+                    val value = row.select("td").text().trim()
+                    
+                    if (header == "البطولة" && value.isNotBlank()) {
+                        extractedTournament = value
+                        // Split tournament names by comma and add each as tag
+                        value.split(",").map { it.trim() }.filter { it.isNotBlank() }.forEach { tag ->
+                            if (!tags.contains(tag)) {
+                                tags.add(tag)
+                            }
+                        }
+                    }
+                    
+                    // Add channel as tag
+                    if (header == "اسم القناة" && value.isNotBlank() && value != "غير معروف") {
+                        if (!tags.contains(value)) {
+                            tags.add(value)
+                        }
+                    }
+                }
+            } else if (tournament.isNotBlank()) {
                 tags.add(tournament)
             }
+            
             if (status == "live") {
                 tags.add("بث مباشر")
             }
+            
+            // Add team names as tags
+            if (team1.isNotBlank()) {
+                tags.add(team1)
+            }
+            if (team2.isNotBlank()) {
+                tags.add(team2)
+            }
+            
             this.tags = tags
             
             // Add recommendations
