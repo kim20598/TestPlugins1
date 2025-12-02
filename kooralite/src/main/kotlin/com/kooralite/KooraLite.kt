@@ -41,16 +41,27 @@ class KooraLite : MainAPI() {
         // Get tournament/league
         val tournament = selectFirst(".MT_Info li:last-child span")?.text()?.trim() ?: ""
         
-        // Get poster/logo (team logo)
-        val poster = selectFirst(".TM_Logo img")?.attr("src")?.let { 
+        // Get both team logos
+        val team1Logo = selectFirst(".TM_Team.TM1 .TM_Logo img")?.attr("src")?.let { 
             if (it.startsWith("http")) it else fixUrl(it) 
         }
         
-        // Create enhanced title
-        val enhancedTitle = "$statusText $title"
+        val team2Logo = selectFirst(".TM_Team.TM2 .TM_Logo img")?.attr("src")?.let { 
+            if (it.startsWith("http")) it else fixUrl(it) 
+        }
         
-        // Store match data
-        val matchData = "$title|$time|$tournament|$statusClass|$poster|$team1|$team2"
+        // Choose the best poster: Team 1 logo, then Team 2 logo
+        val poster = team1Logo ?: team2Logo
+        
+        // Create enhanced title with time if available
+        val enhancedTitle = if (time.isNotBlank()) {
+            "$statusText $title ($time)"
+        } else {
+            "$statusText $title"
+        }
+        
+        // Store match data - include both logos
+        val matchData = "$title|$time|$tournament|$statusClass|$poster|$team1|$team2|$team1Logo|$team2Logo"
         val dataUrl = "$href|$matchData"
         
         return newMovieSearchResponse(enhancedTitle, dataUrl, TvType.Movie) {
@@ -167,9 +178,11 @@ class KooraLite : MainAPI() {
         val time = parts.getOrNull(2) ?: ""
         val tournament = parts.getOrNull(3) ?: ""
         val status = parts.getOrNull(4) ?: ""
-        val poster = parts.getOrNull(5)
+        val poster = parts.getOrNull(5) // Main poster (team1 logo)
         val team1 = parts.getOrNull(6) ?: ""
         val team2 = parts.getOrNull(7) ?: ""
+        val team1Logo = parts.getOrNull(8)
+        val team2Logo = parts.getOrNull(9)
         
         val document = app.get(actualUrl).document
         
@@ -177,6 +190,17 @@ class KooraLite : MainAPI() {
         val description = buildString {
             if (team1.isNotBlank() && team2.isNotBlank()) {
                 append("⚽ $team1 vs $team2\n")
+                
+                // Show both team logos if available
+                if (team1Logo != null || team2Logo != null) {
+                    append("\n🏁 فرق المباراة:\n")
+                    if (team1Logo != null) {
+                        append("• $team1\n")
+                    }
+                    if (team2Logo != null) {
+                        append("• $team2\n")
+                    }
+                }
             }
             
             if (time.isNotBlank()) {
@@ -194,7 +218,7 @@ class KooraLite : MainAPI() {
                 else -> append("⏳ الحالة: قادمة\n")
             }
             
-            // NEW: Extract match info from table
+            // Extract match info from table
             val matchTable = document.select("table.table-bordered")
             if (matchTable.isNotEmpty()) {
                 append("\n📋 بطاقة المباراة:\n")
@@ -272,7 +296,9 @@ class KooraLite : MainAPI() {
         }
         
         return newMovieLoadResponse(title, url, TvType.Movie, data) {
+            // Use team1 logo as main poster
             this.posterUrl = poster
+            
             this.plot = description.trim()
             
             // Add tags - extract from table if available
@@ -363,7 +389,7 @@ class KooraLite : MainAPI() {
             try {
                 val doc = app.get(data).document
                 
-                // NEW: First look for alkoora.live iframes (the main stream iframe)
+                // First look for alkoora.live iframes (the main stream iframe)
                 doc.select("iframe[src*='alkoora.live'], iframe[src*='stream-in.live']").forEach { iframe ->
                     val src = iframe.attr("src")
                     if (src.isNotBlank()) {
@@ -440,7 +466,7 @@ class KooraLite : MainAPI() {
         return foundLinks
     }
     
-    // NEW: Add this function to extract streams from iframes
+    // Function to extract streams from iframes
     private suspend fun extractStreamFromIframe(
         iframeSrc: String,
         referer: String,
