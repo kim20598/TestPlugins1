@@ -276,13 +276,13 @@ class KooraLite : MainAPI() {
                 // Check if it's a direct video URL
                 if (url.contains(".m3u8")) {
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             name,
                             "$name - بث مباشر",
                             url,
                             mainUrl,
                             Qualities.Unknown.value,
-                            true
+                            type = ExtractorLinkType.HLS
                         )
                     )
                     foundLinks = true
@@ -291,13 +291,13 @@ class KooraLite : MainAPI() {
                 
                 if (url.contains(".mp4") || url.contains(".mkv")) {
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             name,
                             "$name - فيديو مباشر",
                             url,
                             mainUrl,
                             Qualities.Unknown.value,
-                            false
+                            type = ExtractorLinkType.VIDEO
                         )
                     )
                     foundLinks = true
@@ -317,7 +317,7 @@ class KooraLite : MainAPI() {
                     }
                 }
                 
-                // Check if it's an albaplayer page (like in the HTML you provided)
+                // Check if it's an albaplayer page
                 if (url.contains("albaplayer") || url.contains("max.mpnh.online")) {
                     foundLinks = extractFromAlbaPlayer(url, subtitleCallback, callback) || foundLinks
                     continue
@@ -396,13 +396,13 @@ class KooraLite : MainAPI() {
                 val src = source.attr("src").trim()
                 if (src.isNotBlank()) {
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             name,
                             "$name - بث",
                             src,
                             url,
                             Qualities.Unknown.value,
-                            src.contains(".m3u8")
+                            type = if (src.contains(".m3u8")) ExtractorLinkType.HLS else ExtractorLinkType.VIDEO
                         )
                     )
                     foundLinks = true
@@ -431,13 +431,13 @@ class KooraLite : MainAPI() {
                 val src = source.attr("src").trim()
                 if (src.isNotBlank()) {
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             name,
                             "$name - بث",
                             src,
                             url,
                             Qualities.Unknown.value,
-                            src.contains(".m3u8")
+                            type = if (src.contains(".m3u8")) ExtractorLinkType.HLS else ExtractorLinkType.VIDEO
                         )
                     )
                     foundLinks = true
