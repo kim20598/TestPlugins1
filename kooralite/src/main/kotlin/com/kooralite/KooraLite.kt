@@ -10,7 +10,7 @@ class KooraLite : MainAPI() {
     override var name = "KooraLite - كورة لايت"
     override var lang = "ar"
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.LiveStream, TvType.Movie)
+    override val supportedTypes = setOf(TvType.Movie) // Changed from LiveStream to Movie
     
     companion object {
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -63,11 +63,11 @@ class KooraLite : MainAPI() {
         // Get team logos (priority: data-src -> src)
         val team1Logo = selectFirst(".TM1 img, .team1 img, .home-team img")?.let { img ->
             img.attr("data-src").ifBlank { img.attr("src") }
-        }?.takeIf { it.isNotBlank() }?.let { fixUrl(it) }
+        }?.takeIf { !it.isNullOrBlank() }?.let { fixUrl(it) }
         
         val team2Logo = selectFirst(".TM2 img, .team2 img, .away-team img")?.let { img ->
             img.attr("data-src").ifBlank { img.attr("src") }
-        }?.takeIf { it.isNotBlank() }?.let { fixUrl(it) }
+        }?.takeIf { !it.isNullOrBlank() }?.let { fixUrl(it) }
         
         // Choose poster (team1 logo, team2 logo, or default)
         val poster = team1Logo ?: team2Logo
@@ -80,22 +80,24 @@ class KooraLite : MainAPI() {
             if (time.isNotBlank()) append(" ($time)")
         }
         
-        // Store all match data
-        val matchData = mapOf(
-            "title" to title,
-            "time" to time,
-            "tournament" to tournament,
-            "status" to statusClass,
-            "poster" to (poster ?: ""),
-            "team1" to team1,
-            "team2" to team2,
-            "team1Logo" to (team1Logo ?: ""),
-            "team2Logo" to (team2Logo ?: "")
-        ).toJson()
+        // Store all match data as JSON string
+        val matchData = """
+            {
+                "title": "${title.replace("\"", "\\\"")}",
+                "time": "${time.replace("\"", "\\\"")}",
+                "tournament": "${tournament.replace("\"", "\\\"")}",
+                "status": "${statusClass.replace("\"", "\\\"")}",
+                "poster": "${(poster ?: "").replace("\"", "\\\"")}",
+                "team1": "${team1.replace("\"", "\\\"")}",
+                "team2": "${team2.replace("\"", "\\\"")}",
+                "team1Logo": "${(team1Logo ?: "").replace("\"", "\\\"")}",
+                "team2Logo": "${(team2Logo ?: "").replace("\"", "\\\"")}"
+            }
+        """.trimIndent()
         
         val dataUrl = "$href|$matchData"
         
-        return newMovieSearchResponse(enhancedTitle, dataUrl, TvType.LiveStream) {
+        return newMovieSearchResponse(enhancedTitle, dataUrl, TvType.Movie) {
             this.posterUrl = poster
         }
     }
@@ -110,7 +112,7 @@ class KooraLite : MainAPI() {
         
         val poster = selectFirst("img")?.let { img ->
             img.attr("data-src").ifBlank { img.attr("src") }
-        }?.takeIf { it.isNotBlank() }?.let { fixUrl(it) }
+        }?.takeIf { !it.isNullOrBlank() }?.let { fixUrl(it) }
         
         // Check if it's a match or regular article
         val isMatch = title.contains("vs", true) || title.contains("مباراة", true) || 
@@ -119,7 +121,7 @@ class KooraLite : MainAPI() {
         return newMovieSearchResponse(
             title, 
             href, 
-            if (isMatch) TvType.LiveStream else TvType.Movie
+            TvType.Movie // Always use Movie type for compatibility
         ) {
             this.posterUrl = poster
         }
@@ -170,7 +172,7 @@ class KooraLite : MainAPI() {
                 
                 if (href.isNotBlank() && text.length > 3) {
                     val fullUrl = fixUrl(href)
-                    items.add(newMovieSearchResponse(text, fullUrl, TvType.LiveStream))
+                    items.add(newMovieSearchResponse(text, fullUrl, TvType.Movie))
                 }
             }
         }
@@ -210,7 +212,7 @@ class KooraLite : MainAPI() {
                     
                     if (text.contains(query, true) && href.isNotBlank()) {
                         val fullUrl = fixUrl(href)
-                        results.add(newMovieSearchResponse(text, fullUrl, TvType.LiveStream))
+                        results.add(newMovieSearchResponse(text, fullUrl, TvType.Movie))
                     }
                 }
             }
@@ -221,15 +223,28 @@ class KooraLite : MainAPI() {
         }
     }
     
+    data class MatchData(
+        val title: String? = null,
+        val time: String? = null,
+        val tournament: String? = null,
+        val status: String? = null,
+        val poster: String? = null,
+        val team1: String? = null,
+        val team2: String? = null,
+        val team1Logo: String? = null,
+        val team2Logo: String? = null
+    )
+    
     override suspend fun load(url: String): LoadResponse {
         // Parse the URL and stored match data
         val parts = url.split("|", limit = 2)
         val actualUrl = parts[0]
         
-        // If we have stored match data, use it
+        // If we have stored match data, parse it
         val matchData = if (parts.size > 1) {
             try {
-                parseJson<Map<String, String>>(parts[1])
+                // Simple JSON parsing for our known structure
+                parseSimpleJson(parts[1])
             } catch (e: Exception) {
                 null
             }
@@ -238,18 +253,18 @@ class KooraLite : MainAPI() {
         val document = app.get(actualUrl, headers = getHeaders()).document
         
         // Extract title from page or stored data
-        val title = matchData?.get("title") 
+        val title = matchData?.title
             ?: document.selectFirst("h1.entry-title, h1.title, h1")?.text()?.trim()
             ?: "مباراة كرة قدم"
         
-        val team1 = matchData?.get("team1") ?: ""
-        val team2 = matchData?.get("team2") ?: ""
-        val time = matchData?.get("time") ?: ""
-        val tournament = matchData?.get("tournament") ?: ""
-        val status = matchData?.get("status") ?: ""
+        val team1 = matchData?.team1 ?: ""
+        val team2 = matchData?.team2 ?: ""
+        val time = matchData?.time ?: ""
+        val tournament = matchData?.tournament ?: ""
+        val status = matchData?.status ?: ""
         
         // Get poster from stored data or page
-        val poster = matchData?.get("poster")?.takeIf { it.isNotBlank() }
+        val poster = matchData?.poster?.takeIf { it.isNotBlank() }
             ?: document.selectFirst("meta[property='og:image']")?.attr("content")?.let { fixUrl(it) }
             ?: document.selectFirst(".poster img, .thumbnail img, img[src*='logo']")?.attr("src")?.let { fixUrl(it) }
         
@@ -326,7 +341,7 @@ class KooraLite : MainAPI() {
             actualUrl
         }
         
-        return newMovieLoadResponse(title, url, TvType.LiveStream, data) {
+        return newMovieLoadResponse(title, url, TvType.Movie, data) {
             this.posterUrl = poster
             this.plot = description.trim()
             
@@ -356,11 +371,39 @@ class KooraLite : MainAPI() {
                     val recHref = link.attr("href")
                     
                     if (recTitle.isNotBlank() && recHref.isNotBlank() && recTitle.length > 3) {
-                        newMovieSearchResponse(recTitle, fixUrl(recHref), TvType.LiveStream)
+                        newMovieSearchResponse(recTitle, fixUrl(recHref), TvType.Movie)
                     } else null
                 }.take(5)
             
             this.recommendations = recommendations
+        }
+    }
+    
+    private fun parseSimpleJson(jsonString: String): MatchData? {
+        return try {
+            val title = Regex("\"title\":\"([^\"]*)\"").find(jsonString)?.groupValues?.get(1)
+            val time = Regex("\"time\":\"([^\"]*)\"").find(jsonString)?.groupValues?.get(1)
+            val tournament = Regex("\"tournament\":\"([^\"]*)\"").find(jsonString)?.groupValues?.get(1)
+            val status = Regex("\"status\":\"([^\"]*)\"").find(jsonString)?.groupValues?.get(1)
+            val poster = Regex("\"poster\":\"([^\"]*)\"").find(jsonString)?.groupValues?.get(1)
+            val team1 = Regex("\"team1\":\"([^\"]*)\"").find(jsonString)?.groupValues?.get(1)
+            val team2 = Regex("\"team2\":\"([^\"]*)\"").find(jsonString)?.groupValues?.get(1)
+            val team1Logo = Regex("\"team1Logo\":\"([^\"]*)\"").find(jsonString)?.groupValues?.get(1)
+            val team2Logo = Regex("\"team2Logo\":\"([^\"]*)\"").find(jsonString)?.groupValues?.get(1)
+            
+            MatchData(
+                title = title,
+                time = time,
+                tournament = tournament,
+                status = status,
+                poster = poster,
+                team1 = team1,
+                team2 = team2,
+                team1Logo = team1Logo,
+                team2Logo = team2Logo
+            )
+        } catch (e: Exception) {
+            null
         }
     }
     
