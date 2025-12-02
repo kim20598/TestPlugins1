@@ -4,47 +4,35 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
-import java.util.*
 
 class KooraLite : MainAPI() {
     override var mainUrl = "https://www.kooralite.live"
     override var name = "KooraLite - كورة لايت"
     override var lang = "ar"
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.LiveStream)
-    override val instantLinkLoading = true
+    override val supportedTypes = setOf(TvType.Movie)
     
-    companion object {
-        private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    
-    // Match item extraction
     private fun Element.toMatchSearchResponse(): SearchResponse? {
+        // Extract match information from .AY_Match div
         val link = selectFirst("a")?.attr("href") ?: return null
         val href = fixUrl(link)
         
-        // Skip if not a match link
-        if (!href.contains("/match/") && !href.contains("stream-in.live")) return null
-        
         // Get team names
-        val team1 = selectFirst(".MT_Team.TM1 .TM_Name")?.text()?.trim() ?: return null
-        val team2 = selectFirst(".MT_Team.TM2 .TM_Name")?.text()?.trim() ?: return null
+        val team1 = selectFirst(".MT_Team.TM1 .TM_Name")?.text()?.trim() ?: ""
+        val team2 = selectFirst(".MT_Team.TM2 .TM_Name")?.text()?.trim() ?: ""
         
+        if (team1.isBlank() || team2.isBlank()) return null
+        
+        // Create title: Team1 vs Team2
         val title = "$team1 vs $team2"
         
         // Get match status
-        val statusClass = classNames().firstOrNull { 
-            it.contains("live", true) || 
-            it.contains("finished", true) || 
-            it.contains("comming", true) || 
-            it.contains("not-started", true)
-        } ?: ""
-        
-        val statusText = when {
-            statusClass.contains("live", true) -> "🔴 مباشر"
-            statusClass.contains("finished", true) -> "✅ انتهت"
-            statusClass.contains("comming", true) -> "⏳ قادمة"
-            else -> "⚽"
+        val matchDiv = this
+        val statusClass = matchDiv.classNames().firstOrNull { it in listOf("live", "finished", "comming-soon") } ?: ""
+        val statusText = when (statusClass) {
+            "live" -> "🔴 مباشر"
+            "finished" -> "✅ انتهت"
+            else -> "⏳ قادم"
         }
         
         // Get match time
@@ -53,42 +41,54 @@ class KooraLite : MainAPI() {
         // Get tournament/league
         val tournament = selectFirst(".MT_Info li:last-child span")?.text()?.trim() ?: ""
         
-        // Get team logos
-        val team1Logo = selectFirst(".TM1 img")?.attr("data-src")?.let { fixUrl(it) }
-        val team2Logo = selectFirst(".TM2 img")?.attr("data-src")?.let { fixUrl(it) }
-        
-        // Choose poster (team1 logo first)
-        val poster = team1Logo ?: team2Logo
-        
-        // Enhanced title
-        val enhancedTitle = buildString {
-            if (statusText.isNotBlank()) append("$statusText ")
-            append(title)
-            if (time.isNotBlank()) append(" ($time)")
+        // Get both team logos
+        val team1Logo = selectFirst(".TM_Team.TM1 .TM_Logo img")?.attr("src")?.let { 
+            if (it.startsWith("http")) it else fixUrl(it) 
         }
         
-        return newMovieSearchResponse(enhancedTitle, href, TvType.LiveStream) {
+        val team2Logo = selectFirst(".TM_Team.TM2 .TM_Logo img")?.attr("src")?.let { 
+            if (it.startsWith("http")) it else fixUrl(it) 
+        }
+        
+        // Choose the best poster: Team 1 logo, then Team 2 logo
+        val poster = team1Logo ?: team2Logo
+        
+        // Create enhanced title with time if available
+        val enhancedTitle = if (time.isNotBlank()) {
+            "$statusText $title ($time)"
+        } else {
+            "$statusText $title"
+        }
+        
+        // Store match data - include both logos
+        val matchData = "$title|$time|$tournament|$statusClass|$poster|$team1|$team2|$team1Logo|$team2Logo"
+        val dataUrl = "$href|$matchData"
+        
+        return newMovieSearchResponse(enhancedTitle, dataUrl, TvType.Movie) {
             this.posterUrl = poster
         }
     }
     
-    // Article item extraction
     private fun Element.toArticleSearchResponse(): SearchResponse? {
+        // For regular articles/posts
         val link = selectFirst("a")?.attr("href") ?: return null
         val href = fixUrl(link)
         
         val title = selectFirst(".gr-title, h3")?.text()?.trim() ?: return null
+        val poster = selectFirst("img")?.attr("data-src")?.let {
+            if (it.startsWith("http")) it else fixUrl(it)
+        } ?: selectFirst("img")?.attr("src")?.let {
+            if (it.startsWith("http")) it else fixUrl(it)
+        }
         
-        val poster = selectFirst(".gr-img")?.attr("data-src")?.let { fixUrl(it) }
-        
-        return newMovieSearchResponse(title, href, TvType.LiveStream) {
+        return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = poster
         }
     }
     
     override val mainPage = mainPageOf(
-        "$mainUrl/" to "الرئيسية",
-        "$mainUrl/matches-today/" to "مباريات اليوم",
+        "$mainUrl/" to "مباريات اليوم",
+        "$mainUrl/matches-today/" to "المباريات الحية",
         "$mainUrl/matches-yesterday/" to "مباريات الأمس",
         "$mainUrl/matches-tomorrow/" to "مباريات الغد",
         "$mainUrl/category/sports-news/" to "أخبار رياضية",
@@ -106,42 +106,42 @@ class KooraLite : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
         val url = if (page > 1) "${request.data}page/$page/" else request.data
-        val document = app.get(url, headers = getHeaders()).document
+        val document = app.get(url).document
         
         val items = mutableListOf<SearchResponse>()
         
-        // For match pages, extract matches
+        // First, get live matches (only on main pages with matches)
         if (request.data.contains("matches-") || request.data == "$mainUrl/") {
             document.select(".AY_Match").forEach { match ->
                 match.toMatchSearchResponse()?.let { items.add(it) }
             }
         }
         
-        // For news/category pages, extract articles
-        if (items.isEmpty() || request.data.contains("category/")) {
-            document.select(".gr-item").forEach { article ->
+        // If no matches found, get articles/posts
+        if (items.isEmpty()) {
+            document.select(".gr-item, article, .post").forEach { article ->
                 article.toArticleSearchResponse()?.let { items.add(it) }
             }
         }
         
-        // Fallback: direct links
+        // Fallback: get any links that look like matches
         if (items.isEmpty()) {
-            document.select("a[href*='/match/'], a[href*='stream-in.live']").forEach { link ->
+            document.select("a").forEach { link ->
                 val href = link.attr("href")
                 val text = link.text().trim()
                 
-                if (text.isNotBlank() && href.isNotBlank()) {
+                if (href.contains("/match/") || href.contains("stream-in.live") || 
+                    text.contains("مباراة") || text.contains("بث مباشر")) {
+                    
                     val fullUrl = fixUrl(href)
-                    items.add(newMovieSearchResponse(text, fullUrl, TvType.LiveStream))
+                    if (text.length > 3) {
+                        items.add(newMovieSearchResponse(text, fullUrl, TvType.Movie))
+                    }
                 }
             }
         }
         
-        return newHomePageResponse(
-            request.name, 
-            items.distinctBy { it.url },
-            hasNext = items.isNotEmpty() && document.select("a.next, .pagination a").isNotEmpty()
-        )
+        return newHomePageResponse(request.name, items, hasNext = true)
     }
     
     override suspend fun search(query: String): List<SearchResponse> {
@@ -151,125 +151,244 @@ class KooraLite : MainAPI() {
         val searchUrl = "$mainUrl/?s=$encodedQuery"
         
         return try {
-            val document = app.get(searchUrl, headers = getHeaders()).document
+            val document = app.get(searchUrl).document
             val results = mutableListOf<SearchResponse>()
             
-            // Look for matches
+            // Try to find matches
             document.select(".AY_Match").forEach { match ->
                 match.toMatchSearchResponse()?.let { results.add(it) }
             }
             
-            // Look for articles
-            document.select(".gr-item").forEach { article ->
+            // Try to find articles
+            document.select(".gr-item, .search-result, article").forEach { article ->
                 article.toArticleSearchResponse()?.let { results.add(it) }
             }
             
-            // Direct links fallback
-            document.select("a[href*='/match/']").forEach { link ->
-                val href = link.attr("href")
-                val text = link.text().trim()
-                
-                if (text.isNotBlank() && href.isNotBlank()) {
-                    val fullUrl = fixUrl(href)
-                    results.add(newMovieSearchResponse(text, fullUrl, TvType.LiveStream))
-                }
-            }
-            
-            results.distinctBy { it.url }
+            results
         } catch (e: Exception) {
             emptyList()
         }
     }
     
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url, headers = getHeaders()).document
+        // Parse stored match data
+        val parts = url.split("|")
+        val actualUrl = parts[0]
+        val title = parts.getOrNull(1) ?: "مباراة كرة قدم"
+        val time = parts.getOrNull(2) ?: ""
+        val tournament = parts.getOrNull(3) ?: ""
+        val status = parts.getOrNull(4) ?: ""
+        val poster = parts.getOrNull(5) // Main poster (team1 logo)
+        val team1 = parts.getOrNull(6) ?: ""
+        val team2 = parts.getOrNull(7) ?: ""
+        val team1Logo = parts.getOrNull(8)
+        val team2Logo = parts.getOrNull(9)
         
-        // Extract title
-        val title = document.selectFirst("h1.entry-title, h1.title, h1")?.text()?.trim()
-            ?: "مباراة كرة قدم"
+        val document = app.get(actualUrl).document
         
-        // Extract poster
-        val poster = document.selectFirst("meta[property='og:image']")?.attr("content")?.let { fixUrl(it) }
-            ?: document.selectFirst("img[src*='logo']")?.attr("src")?.let { fixUrl(it) }
-        
-        // Extract description from match info
+        // Build description
         val description = buildString {
-            // Extract match details from table
+            if (team1.isNotBlank() && team2.isNotBlank()) {
+                append("⚽ $team1 vs $team2\n")
+                
+                // Show both team logos if available
+                if (team1Logo != null || team2Logo != null) {
+                    append("\n🏁 فرق المباراة:\n")
+                    if (team1Logo != null) {
+                        append("• $team1\n")
+                    }
+                    if (team2Logo != null) {
+                        append("• $team2\n")
+                    }
+                }
+            }
+            
+            if (time.isNotBlank()) {
+                append("🕒 الوقت: $time\n")
+            }
+            
+            if (tournament.isNotBlank()) {
+                append("🏆 البطولة: $tournament\n")
+            }
+            
+            // Add status
+            when (status) {
+                "live" -> append("🔴 الحالة: البث مباشر الآن\n")
+                "finished" -> append("✅ الحالة: انتهت المباراة\n")
+                else -> append("⏳ الحالة: قادمة\n")
+            }
+            
+            // Extract match info from table
             val matchTable = document.select("table.table-bordered")
             if (matchTable.isNotEmpty()) {
-                append("📋 معلومات المباراة:\n")
+                append("\n📋 بطاقة المباراة:\n")
                 
+                // Extract table rows
                 matchTable.select("tr").forEach { row ->
                     val header = row.select("th").text().trim()
                     val value = row.select("td").text().trim()
                     
                     if (header.isNotBlank() && value.isNotBlank()) {
-                        append("• $header: $value\n")
+                        when (header) {
+                            "البطولة" -> append("🏆 $header: $value\n")
+                            "اسم القناة" -> append("📺 $header: $value\n")
+                            "تاريخ المباراة" -> append("📅 $header: $value\n")
+                            "توقيت المباراة" -> append("⏰ $header: $value\n")
+                            "المعلق" -> append("🎙️ $header: $value\n")
+                            "نتيجة المباراة" -> append("📊 $header: $value\n")
+                            else -> append("• $header: $value\n")
+                        }
                     }
                 }
             }
             
-            // Extract stream servers from iframes
-            val iframes = document.select("iframe[src]")
-            if (iframes.isNotEmpty()) {
-                append("\n📡 السيرفرات المتاحة:\n")
-                iframes.forEachIndexed { index, iframe ->
-                    val src = iframe.attr("src").trim()
-                    if (src.isNotBlank()) {
-                        append("• سيرفر ${index + 1}\n")
-                    }
+            // Try to find stream quality/links info
+            document.select(".video-serv a").forEach { streamLink ->
+                val streamName = streamLink.text().trim()
+                if (streamName.isNotBlank()) {
+                    append("📡 $streamName\n")
                 }
             }
-        }
-        
-        // Extract stream links - focus on alkoora.live iframes
-        val streamLinks = mutableListOf<String>()
-        
-        // Look for alkoora.live iframes (primary stream source)
-        document.select("iframe[src*='alkoora.live']").forEach { iframe ->
-            val src = iframe.attr("src").trim()
-            if (src.isNotBlank()) {
-                streamLinks.add(src)
+            
+            // Add server information if available
+            val servers = document.select(".video-serv a")
+            if (servers.isNotEmpty()) {
+                append("\n🔗 السيرفرات المتاحة: ${servers.size}\n")
             }
         }
         
-        // Also look for other iframes as fallback
-        if (streamLinks.isEmpty()) {
-            document.select("iframe[src]").forEach { iframe ->
-                val src = iframe.attr("src").trim()
-                if (src.isNotBlank() && src.contains("stream|watch|video", true)) {
+        // Look for stream links
+        val streamLinks = mutableSetOf<String>()
+        
+        // Method 1: Look for iframes in the page
+        document.select("iframe[src]").forEach { iframe ->
+            val src = iframe.attr("src")
+            if (src.isNotBlank()) {
+                // Check for YouTube iframes specifically
+                if (src.contains("youtube.com") || src.contains("youtu.be")) {
+                    streamLinks.add(src)
+                } else if (src.contains("stream")) {
                     streamLinks.add(src)
                 }
             }
         }
         
-        // Look for direct stream-in.live links
-        if (streamLinks.isEmpty() && url.contains("stream-in.live")) {
-            streamLinks.add(url)
+        // Method 2: Check if URL is already a stream link
+        if (actualUrl.contains("stream-in.live") || actualUrl.contains("stream") || 
+            actualUrl.contains("albaplayer") || actualUrl.contains("max.mpnh.online")) {
+            streamLinks.add(actualUrl)
+        }
+        
+        // Method 3: Look for video elements
+        document.select("video source[src]").forEach { source ->
+            val src = source.attr("src")
+            if (src.isNotBlank()) {
+                streamLinks.add(src)
+            }
+        }
+        
+        // Method 4: Look for links with streaming keywords
+        document.select("a[href*='stream'], a[href*='watch'], a[href*='live']").forEach { link ->
+            val href = link.attr("href")
+            if (href.isNotBlank() && href.startsWith("http")) {
+                streamLinks.add(href)
+            }
+        }
+        
+        // Method 5: Look for YouTube embed URLs in scripts
+        document.select("script").forEach { script ->
+            val scriptText = script.html()
+            val patterns = listOf(
+                Regex("""youtube\.com/embed/([^"']+)"""),
+                Regex("""youtu\.be/([^"']+)"""),
+                Regex("""['"](https?://[^"']*\.m3u8[^"']*)['"]"""),
+                Regex("""['"](https?://[^"']*\.mp4[^"']*)['"]""")
+            )
+            
+            patterns.forEach { pattern ->
+                pattern.findAll(scriptText).forEach { match ->
+                    val url = match.groupValues.getOrNull(1)
+                    if (url != null && url.isNotBlank()) {
+                        // If it's a YouTube ID, construct full URL
+                        if (!url.contains("http") && (pattern.pattern.contains("youtube") || pattern.pattern.contains("youtu.be"))) {
+                            streamLinks.add("https://www.youtube.com/watch?v=$url")
+                        } else if (url.startsWith("http")) {
+                            streamLinks.add(url)
+                        }
+                    }
+                }
+            }
         }
         
         val data = if (streamLinks.isNotEmpty()) {
             streamLinks.joinToString("|||")
         } else {
-            url
+            actualUrl
         }
         
-        return newMovieLoadResponse(title, url, TvType.LiveStream, data) {
+        return newMovieLoadResponse(title, url, TvType.Movie, data) {
+            // Use team1 logo as main poster
             this.posterUrl = poster
-            this.plot = description.ifBlank { "مباراة كرة قدم مباشرة" }
-            this.year = Calendar.getInstance().get(Calendar.YEAR)
-            this.tags = listOf("كرة قدم", "رياضة", "بث مباشر")
             
-            // Recommendations
-            val recommendations = document.select(".related-posts a, .widget a")
-                .mapNotNull { link ->
-                    val recTitle = link.text().trim()
-                    val recHref = link.attr("href")
+            this.plot = description.trim()
+            
+            // Add tags - extract from table if available
+            val tags = mutableListOf("كرة قدم", "رياضة", "مباراة")
+            
+            // Try to extract tournament from table
+            val matchTable = document.select("table.table-bordered")
+            var extractedTournament = tournament
+            
+            if (matchTable.isNotEmpty()) {
+                matchTable.select("tr").forEach { row ->
+                    val header = row.select("th").text().trim()
+                    val value = row.select("td").text().trim()
                     
-                    if (recTitle.isNotBlank() && recHref.isNotBlank() && recHref.contains("/match/")) {
-                        newMovieSearchResponse(recTitle, fixUrl(recHref), TvType.LiveStream)
-                    } else null
-                }.take(5)
+                    if (header == "البطولة" && value.isNotBlank()) {
+                        extractedTournament = value
+                        // Split tournament names by comma and add each as tag
+                        value.split(",").map { it.trim() }.filter { it.isNotBlank() }.forEach { tag ->
+                            if (!tags.contains(tag)) {
+                                tags.add(tag)
+                            }
+                        }
+                    }
+                    
+                    // Add channel as tag
+                    if (header == "اسم القناة" && value.isNotBlank() && value != "غير معروف") {
+                        if (!tags.contains(value)) {
+                            tags.add(value)
+                        }
+                    }
+                }
+            } else if (tournament.isNotBlank()) {
+                tags.add(tournament)
+            }
+            
+            if (status == "live") {
+                tags.add("بث مباشر")
+            }
+            
+            // Add team names as tags
+            if (team1.isNotBlank()) {
+                tags.add(team1)
+            }
+            if (team2.isNotBlank()) {
+                tags.add(team2)
+            }
+            
+            this.tags = tags
+            
+            // Add recommendations
+            val recommendations = document.select(".related-posts a, .widget a, .gr-item a").mapNotNull { link ->
+                val recTitle = link.text().trim()
+                val recHref = link.attr("href")
+                
+                if (recTitle.isNotBlank() && recHref.isNotBlank() && recTitle.length > 3) {
+                    val fullUrl = fixUrl(recHref)
+                    newMovieSearchResponse(recTitle, fullUrl, TvType.Movie)
+                } else null
+            }.take(5)
             
             this.recommendations = recommendations
         }
@@ -287,239 +406,308 @@ class KooraLite : MainAPI() {
         if (data.contains("|||")) {
             val streamLinks = data.split("|||").filter { it.isNotBlank() }
             
-            streamLinks.forEachIndexed { index, streamUrl ->
+            streamLinks.forEach { streamUrl ->
                 try {
-                    // Check if it's an alkoora.live player
-                    if (streamUrl.contains("alkoora.live")) {
-                        handleAlkooraStream(streamUrl, index, callback)
-                        foundLinks = true
+                    // Check if it's a YouTube URL first
+                    if (isYouTubeUrl(streamUrl)) {
+                        foundLinks = extractYouTubeStream(streamUrl, subtitleCallback, callback) || foundLinks
                     } else {
-                        // Try Cloudstream extractors for other URLs
                         loadExtractor(streamUrl, mainUrl, subtitleCallback, callback)
                         foundLinks = true
                     }
                 } catch (e: Exception) {
-                    // If extractor fails, check if it's a direct video URL
-                    handleDirectStream(streamUrl, index, callback)
-                    foundLinks = true
+                    // Try direct extraction
+                    tryExtractDirectLink(streamUrl, callback)
                 }
             }
         } else {
-            // Single URL - try to extract streams
+            // Single URL - try to extract from the page
             try {
-                // Check if it's a direct alkoora stream
-                if (data.contains("alkoora.live")) {
-                    handleAlkooraStream(data, 0, callback)
-                    foundLinks = true
-                } else {
-                    // Load the page and extract iframes
-                    val doc = app.get(data, headers = getHeaders()).document
-                    
-                    // Look for alkoora.live iframes first
-                    doc.select("iframe[src*='alkoora.live']").forEach { iframe ->
-                        val src = iframe.attr("src").trim()
-                        if (src.isNotBlank()) {
-                            handleAlkooraStream(src, 0, callback)
-                            foundLinks = true
-                        }
+                val doc = app.get(data).document
+                
+                // First look for alkoora.live iframes (the main stream iframe)
+                doc.select("iframe[src*='alkoora.live'], iframe[src*='stream-in.live']").forEach { iframe ->
+                    val src = iframe.attr("src")
+                    if (src.isNotBlank()) {
+                        // Extract from the iframe
+                        foundLinks = extractStreamFromIframe(src, data, subtitleCallback, callback) || foundLinks
                     }
+                }
+                
+                // Look for YouTube iframes
+                doc.select("iframe[src*='youtube.com'], iframe[src*='youtu.be']").forEach { iframe ->
+                    val src = iframe.attr("src")
+                    if (src.isNotBlank()) {
+                        foundLinks = extractYouTubeStream(src, subtitleCallback, callback) || foundLinks
+                    }
+                }
+                
+                // Look for other iframes
+                doc.select("iframe[src]").forEach { iframe ->
+                    val src = iframe.attr("src")
+                    if (src.isNotBlank() && !src.contains("alkoora.live") && !src.contains("stream-in.live") && 
+                        !src.contains("youtube.com") && !src.contains("youtu.be")) {
+                        loadExtractor(src, data, subtitleCallback, callback)
+                        foundLinks = true
+                    }
+                }
+                
+                // Look for direct video links
+                doc.select("video source[src]").forEach { source ->
+                    val videoUrl = source.attr("src")
+                    if (videoUrl.isNotBlank()) {
+                        callback.invoke(
+                            newExtractorLink(
+                                name,
+                                "$name - بث مباشر",
+                                videoUrl,
+                                if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = data
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
+                        foundLinks = true
+                    }
+                }
+                
+                // Look for streaming scripts
+                doc.select("script").forEach { script ->
+                    val scriptText = script.html()
                     
-                    // Also try other iframes
-                    if (!foundLinks) {
-                        doc.select("iframe[src]").forEach { iframe ->
-                            val src = iframe.attr("src").trim()
-                            if (src.isNotBlank()) {
-                                try {
-                                    loadExtractor(src, data, subtitleCallback, callback)
+                    // Common streaming URL patterns
+                    val patterns = listOf(
+                        Regex("""(https?://[^\s'"]*\.m3u8[^\s'"]*)"""),
+                        Regex("""['"](https?://[^'"]*stream[^'"]*)['"]"""),
+                        Regex("""src\s*[:=]\s*['"](https?://[^'"]+)['"]"""),
+                        // YouTube patterns
+                        Regex("""youtube\.com/embed/([^"']+)"""),
+                        Regex("""youtu\.be/([^"']+)""")
+                    )
+                    
+                    patterns.forEach { pattern ->
+                        pattern.findAll(scriptText).forEach { match ->
+                            val url = match.groupValues[1]
+                            if (url.isNotBlank()) {
+                                if (pattern.pattern.contains("youtube")) {
+                                    // It's a YouTube ID, construct full URL
+                                    val youtubeUrl = "https://www.youtube.com/watch?v=$url"
+                                    foundLinks = extractYouTubeStream(youtubeUrl, subtitleCallback, callback) || foundLinks
+                                } else if (url.contains("m3u8") || url.contains("stream")) {
+                                    loadExtractor(url, data, subtitleCallback, callback)
                                     foundLinks = true
-                                } catch (e: Exception) {
-                                    // Ignore extractor failures
                                 }
                             }
                         }
                     }
                 }
+                
             } catch (e: Exception) {
-                // If everything fails, try the URL directly
-                handleDirectStream(data, 0, callback)
+                // Error loading page - try direct URL
+                if (isYouTubeUrl(data)) {
+                    foundLinks = extractYouTubeStream(data, subtitleCallback, callback) || foundLinks
+                } else {
+                    try {
+                        loadExtractor(data, mainUrl, subtitleCallback, callback)
+                        foundLinks = true
+                    } catch (e: Exception) {
+                        // Ignore
+                    }
+                }
+            }
+        }
+        
+        // If still no links found, check if URL is from stream-in.live or albaplayer
+        if (!foundLinks && (data.contains("stream-in.live") || data.contains("/2025/") || 
+            data.contains("albaplayer") || data.contains("max.mpnh.online"))) {
+            try {
+                loadExtractor(data, mainUrl, subtitleCallback, callback)
                 foundLinks = true
+            } catch (e: Exception) {
+                // Ignore
             }
         }
         
         return foundLinks
     }
     
-    private suspend fun handleAlkooraStream(
-        streamUrl: String,
-        serverIndex: Int,
+    // Function to extract streams from iframes
+    private suspend fun extractStreamFromIframe(
+        iframeSrc: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ) {
+    ): Boolean {
+        var foundLinks = false
+        
         try {
-            // Try to load the alkoora player page
-            val playerDoc = app.get(streamUrl, headers = getHeaders()).document
+            val iframeDoc = app.get(iframeSrc, referer = referer).document
             
-            // Look for m3u8 URLs in scripts
-            playerDoc.select("script").forEach { script ->
-                val scriptText = script.html()
-                
-                // Pattern for m3u8 URLs
-                val m3u8Pattern = Regex("""['"](https?://[^'"]*\.m3u8[^'"]*)['"]""")
-                m3u8Pattern.findAll(scriptText).forEach { match ->
-                    val m3u8Url = match.groupValues[1].trim()
-                    if (m3u8Url.isNotBlank()) {
-                        callback.invoke(
-                            newExtractorLink(
-                                name,
-                                "$name - سيرفر ${serverIndex + 1}",
-                                m3u8Url,
-                                ExtractorLinkType.HLS
-                            ) {
-                                this.referer = streamUrl
-                                this.quality = Qualities.Unknown.value
-                                this.headers = getHeaders()
-                            }
-                        )
-                    }
+            // Method 1: Look for video elements in iframe
+            iframeDoc.select("video source[src]").forEach { source ->
+                val videoUrl = source.attr("src")
+                if (videoUrl.isNotBlank()) {
+                    callback.invoke(
+                        newExtractorLink(
+                            name,
+                            "$name - بث مباشر",
+                            videoUrl,
+                            if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = iframeSrc
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
+                    foundLinks = true
                 }
-                
-                // Pattern for stream master URLs
-                val streamPattern = Regex("""['"](https?://[^'"]*master\.m3u8[^'"]*)['"]""")
-                streamPattern.findAll(scriptText).forEach { match ->
-                    val masterUrl = match.groupValues[1].trim()
-                    if (masterUrl.isNotBlank()) {
-                        callback.invoke(
-                            newExtractorLink(
-                                name,
-                                "$name - سيرفر ${serverIndex + 1} (HD)",
-                                masterUrl,
-                                ExtractorLinkType.HLS
-                            ) {
-                                this.referer = streamUrl
-                                this.quality = Qualities.Unknown.value
-                                this.headers = getHeaders()
-                            }
-                        )
+            }
+            
+            // Method 2: Look for YouTube iframes in iframe
+            iframeDoc.select("iframe[src*='youtube.com'], iframe[src*='youtu.be']").forEach { iframe ->
+                val src = iframe.attr("src")
+                if (src.isNotBlank()) {
+                    foundLinks = extractYouTubeStream(src, subtitleCallback, callback) || foundLinks
+                }
+            }
+            
+            // Method 3: Look for streaming scripts in iframe
+            val iframeScripts = iframeDoc.select("script").html()
+            
+            // Check for common streaming URL patterns in iframe
+            val patterns = listOf(
+                Regex("""(https?://[^\s'"]*\.m3u8[^\s'"]*)"""),
+                Regex("""['"](https?://[^'"]*stream[^'"]*)['"]"""),
+                Regex("""['"](https?://[^'"]*\.mp4[^'"]*)['"]"""),
+                Regex("""src\s*[:=]\s*['"](https?://[^'"]+)['"]"""),
+                Regex("""file\s*[:=]\s*['"](https?://[^'"]+\.m3u8)['"]"""),
+                Regex("""hls\.src\s*=\s*['"]([^'"]+)['"]"""),
+                Regex("""player\.src\s*=\s*['"]([^'"]+)['"]"""),
+                // YouTube patterns
+                Regex("""youtube\.com/embed/([^"']+)"""),
+                Regex("""youtu\.be/([^"']+)""")
+            )
+            
+            patterns.forEach { pattern ->
+                pattern.findAll(iframeScripts).forEach { match ->
+                    val url = match.groupValues[1]
+                    if (url.isNotBlank()) {
+                        if (pattern.pattern.contains("youtube")) {
+                            // It's a YouTube ID, construct full URL
+                            val youtubeUrl = "https://www.youtube.com/watch?v=$url"
+                            foundLinks = extractYouTubeStream(youtubeUrl, subtitleCallback, callback) || foundLinks
+                        } else if (url.contains("m3u8") || url.contains("mp4") || url.contains("stream")) {
+                            loadExtractor(url, iframeSrc, subtitleCallback, callback)
+                            foundLinks = true
+                        }
                     }
                 }
             }
             
-            // Also check for direct video elements
-            playerDoc.select("video source[src]").forEach { source ->
-                val src = source.attr("src").trim()
-                if (src.isNotBlank() && src.contains(".m3u8")) {
-                    callback.invoke(
-                        newExtractorLink(
-                            name,
-                            "$name - سيرفر ${serverIndex + 1}",
-                            src,
-                            ExtractorLinkType.HLS
-                        ) {
-                            this.referer = streamUrl
-                            this.quality = Qualities.Unknown.value
-                            this.headers = getHeaders()
-                        }
-                    )
+            // Method 4: Look for nested iframes
+            iframeDoc.select("iframe[src]").forEach { nestedIframe ->
+                val nestedSrc = nestedIframe.attr("src")
+                if (nestedSrc.isNotBlank()) {
+                    foundLinks = extractStreamFromIframe(nestedSrc, iframeSrc, subtitleCallback, callback) || foundLinks
+                }
+            }
+            
+            // Method 5: Try to load the iframe URL directly as a stream
+            if (!foundLinks) {
+                try {
+                    loadExtractor(iframeSrc, referer, subtitleCallback, callback)
+                    foundLinks = true
+                } catch (e: Exception) {
+                    // Ignore
                 }
             }
             
         } catch (e: Exception) {
-            // If we can't extract m3u8, try the alkoora URL directly
-            // Sometimes alkoora redirects to actual stream
+            // If iframe extraction fails, try the iframe URL directly
             try {
-                loadExtractor(streamUrl, mainUrl, {}) { link ->
-                    callback.invoke(link)
-                }
+                loadExtractor(iframeSrc, referer, subtitleCallback, callback)
+                foundLinks = true
             } catch (e: Exception) {
-                // Last resort: create a direct link to the iframe
+                // Ignore
+            }
+        }
+        
+        return foundLinks
+    }
+    
+    private suspend fun tryExtractDirectLink(url: String, callback: (ExtractorLink) -> Unit) {
+        try {
+            // Check if it's a direct video URL
+            if (url.contains(".m3u8") || url.contains(".mp4") || url.contains(".mkv")) {
                 callback.invoke(
                     newExtractorLink(
                         name,
-                        "$name - سيرفر ${serverIndex + 1}",
-                        streamUrl,
-                        ExtractorLinkType.HLS
+                        "$name - بث مباشر",
+                        url,
+                        if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                     ) {
                         this.referer = mainUrl
                         this.quality = Qualities.Unknown.value
-                        this.headers = getHeaders()
                     }
                 )
             }
+        } catch (e: Exception) {
+            // Ignore errors
         }
     }
     
-    private fun handleDirectStream(
-        streamUrl: String,
-        serverIndex: Int,
+    // Helper function to check if URL is YouTube
+    private fun isYouTubeUrl(url: String): Boolean {
+        return url.contains("youtube.com") || url.contains("youtu.be")
+    }
+    
+    // Helper function to extract YouTube streams
+    private suspend fun extractYouTubeStream(
+        url: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ) {
-        // Check if it's a direct video URL
-        when {
-            streamUrl.contains(".m3u8", true) -> {
-                callback.invoke(
-                    newExtractorLink(
-                        name,
-                        "$name - سيرفر ${serverIndex + 1}",
-                        streamUrl,
-                        ExtractorLinkType.HLS
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.Unknown.value
-                        this.headers = getHeaders()
-                    }
-                )
+    ): Boolean {
+        try {
+            // Extract YouTube video ID
+            val videoId = extractYouTubeId(url)
+            if (videoId != null) {
+                // Construct proper YouTube watch URL
+                val youtubeUrl = "https://www.youtube.com/watch?v=$videoId"
+                // Use CloudStream's YouTube extractor
+                loadExtractor(youtubeUrl, mainUrl, subtitleCallback, callback)
+                return true
             }
-            
-            streamUrl.contains(".mp4", true) -> {
-                callback.invoke(
-                    newExtractorLink(
-                        name,
-                        "$name - سيرفر ${serverIndex + 1}",
-                        streamUrl,
-                        ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.Unknown.value
-                        this.headers = getHeaders()
-                    }
-                )
-            }
-            
-            streamUrl.contains("youtube.com", true) -> {
-                // YouTube streams - will be handled by Cloudstream's YouTube extractor
-                callback.invoke(
-                    newExtractorLink(
-                        name,
-                        "$name - سيرفر ${serverIndex + 1} (YouTube)",
-                        streamUrl,
-                        ExtractorLinkType.HLS
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
+        } catch (e: Exception) {
+            // Try direct URL if extraction fails
+            try {
+                loadExtractor(url, mainUrl, subtitleCallback, callback)
+                return true
+            } catch (e: Exception) {
+                // Ignore
             }
         }
+        return false
     }
     
-    private fun getHeaders(): Map<String, String> {
-        return mapOf(
-            "User-Agent" to USER_AGENT,
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3",
-            "Accept-Encoding" to "gzip, deflate, br",
-            "Connection" to "keep-alive",
-            "Upgrade-Insecure-Requests" to "1",
-            "Referer" to mainUrl,
-            "Sec-Fetch-Dest" to "document",
-            "Sec-Fetch-Mode" to "navigate",
-            "Sec-Fetch-Site" to "same-origin",
-            "Cache-Control" to "max-age=0"
+    // Helper function to extract YouTube video ID
+    private fun extractYouTubeId(url: String): String? {
+        val patterns = listOf(
+            Regex("""youtube\.com/embed/([^?&]+)"""),
+            Regex("""youtu\.be/([^?&]+)"""),
+            Regex("""youtube\.com/watch\?v=([^&]+)"""),
+            Regex("""youtube\.com/v/([^?&]+)""")
         )
+        
+        for (pattern in patterns) {
+            pattern.find(url)?.let { match ->
+                return match.groupValues[1]
+            }
+        }
+        return null
     }
     
     private fun fixUrl(url: String): String {
-        if (url.isBlank()) return ""
         return when {
+            url.isBlank() -> ""
             url.startsWith("http") -> url
             url.startsWith("//") -> "https:$url"
             url.startsWith("/") -> "$mainUrl$url"
