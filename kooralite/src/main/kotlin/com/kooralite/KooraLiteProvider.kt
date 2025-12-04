@@ -8,7 +8,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class KooraLiteProvider : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(KooraLite())
-        registerMainAPI(KooraActivity())
     }
 
 }
+
