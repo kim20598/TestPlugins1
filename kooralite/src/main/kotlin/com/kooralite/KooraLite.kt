@@ -5,25 +5,6 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
-// Android / ExoPlayer imports (KooraActivity appended below)
-import android.content.Context
-import android.net.Uri
-import android.os.Bundle
-import android.view.Gravity
-import android.view.ViewGroup
-import android.widget.FrameLayout
-import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
-import com.google.android.exoplayer2.ExoPlayer
-import com.google.android.exoplayer2.MediaItem
-import com.google.android.exoplayer2.PlaybackException
-import com.google.android.exoplayer2.Player
-import com.google.android.exoplayer2.ui.PlayerView
-import com.google.android.exoplayer2.upstream.DefaultHttpDataSource
-import com.google.android.exoplayer2.source.hls.HlsMediaSource
-import com.google.android.exoplayer2.source.MediaSource
-import kotlin.random.Random
-
 class KooraLite : MainAPI() {
     override var mainUrl = "https://www.kooralite.live"
     override var name = "KooraLite - كورة لايت"
@@ -32,27 +13,22 @@ class KooraLite : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie)
 
     private fun Element.toMatchSearchResponse(): SearchResponse? {
-        // Extract match information from .AY_Match div
         val link = selectFirst("a")?.attr("href") ?: return null
         val href = fixUrl(link)
 
-        // Get team names (use consistent class name MT_Team)
         val team1 = selectFirst(".MT_Team.TM1 .TM_Name")?.text()?.trim() ?: ""
         val team2 = selectFirst(".MT_Team.TM2 .TM_Name")?.text()?.trim() ?: ""
 
         if (team1.isBlank() || team2.isBlank()) return null
 
-        // Create title: Team1 vs Team2
         val title = "$team1 vs $team2"
 
-        // Get match status: check class names and also fallback to status text
         val statusClass = classNames().firstOrNull { it in listOf("live", "finished", "coming-soon") } ?: ""
         val statusText = when (statusClass) {
             "live" -> "🔴 مباشر"
             "finished" -> "✅ انتهت"
             "coming-soon" -> "⏳ قادم"
             else -> {
-                // fallback: try to read textual status from a dedicated element if present
                 val txt = selectFirst(".MT_Status")?.text()?.trim()
                 when {
                     txt?.contains("مباشر") == true -> "🔴 مباشر"
@@ -63,33 +39,26 @@ class KooraLite : MainAPI() {
             }
         }
 
-        // Get match time
         val time = selectFirst(".MT_Time")?.text()?.trim() ?: ""
 
-        // Get tournament/league - use safer selection
         val tournament = selectFirst(".MT_Info li:last-child span")?.text()?.trim()
             ?: selectFirst(".MT_Info li")?.let { select(".MT_Info li").lastOrNull()?.selectFirst("span")?.text()?.trim() }
             ?: ""
 
-        // Get both team logos (use consistent MT_Team)
         val team1LogoRaw = selectFirst(".MT_Team.TM1 .TM_Logo img")?.attr("src")
         val team2LogoRaw = selectFirst(".MT_Team.TM2 .TM_Logo img")?.attr("src")
 
         val team1Logo = team1LogoRaw?.let { if (it.startsWith("http")) it else fixUrl(it) }
         val team2Logo = team2LogoRaw?.let { if (it.startsWith("http")) it else fixUrl(it) }
 
-        // Choose the best poster: Team 1 logo, then Team 2 logo
         val poster = team1Logo ?: team2Logo
 
-        // Create enhanced title with time if available
         val enhancedTitle = if (time.isNotBlank()) {
             "$statusText $title ($time)"
         } else {
             "$statusText $title"
         }
 
-        // Store match data - include both logos
-        // Data format: href|title|time|tournament|statusClass|poster|team1|team2|team1Logo|team2Logo
         val matchData = listOf(title, time, tournament, statusClass, poster ?: "", team1, team2, team1Logo ?: "", team2Logo ?: "")
             .joinToString("|")
         val dataUrl = "$href|$matchData"
@@ -100,7 +69,6 @@ class KooraLite : MainAPI() {
     }
 
     private fun Element.toArticleSearchResponse(): SearchResponse? {
-        // For regular articles/posts
         val link = selectFirst("a")?.attr("href") ?: return null
         val href = fixUrl(link)
 
@@ -140,21 +108,18 @@ class KooraLite : MainAPI() {
 
         val items = mutableListOf<SearchResponse>()
 
-        // First, get live matches (only on main pages with matches)
         if (request.data.contains("matches-") || request.data == "$mainUrl/") {
             document.select(".AY_Match").forEach { match ->
                 match.toMatchSearchResponse()?.let { items.add(it) }
             }
         }
 
-        // If no matches found, get articles/posts
         if (items.isEmpty()) {
             document.select(".gr-item, article, .post").forEach { article ->
                 article.toArticleSearchResponse()?.let { items.add(it) }
             }
         }
 
-        // Fallback: get any links that look like matches
         if (items.isEmpty()) {
             document.select("a").forEach { link ->
                 val href = link.attr("href")
@@ -184,12 +149,10 @@ class KooraLite : MainAPI() {
             val document = app.get(searchUrl).document
             val results = mutableListOf<SearchResponse>()
 
-            // Try to find matches
             document.select(".AY_Match").forEach { match ->
                 match.toMatchSearchResponse()?.let { results.add(it) }
             }
 
-            // Try to find articles
             document.select(".gr-item, .search-result, article").forEach { article ->
                 article.toArticleSearchResponse()?.let { results.add(it) }
             }
@@ -201,14 +164,13 @@ class KooraLite : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // Parse stored match data
         val parts = url.split("|")
         val actualUrl = parts[0]
         val title = parts.getOrNull(1) ?: "مباراة كرة قدم"
         val time = parts.getOrNull(2) ?: ""
         var tournament = parts.getOrNull(3) ?: ""
         val status = parts.getOrNull(4) ?: ""
-        val poster = parts.getOrNull(5) // Main poster (team1 logo)
+        val poster = parts.getOrNull(5)
         val team1 = parts.getOrNull(6) ?: ""
         val team2 = parts.getOrNull(7) ?: ""
         val team1Logo = parts.getOrNull(8)
@@ -216,48 +178,32 @@ class KooraLite : MainAPI() {
 
         val document = app.get(actualUrl).document
 
-        // Build description
         val description = buildString {
             if (team1.isNotBlank() && team2.isNotBlank()) {
                 append("⚽ $team1 vs $team2\n")
 
-                // Show both team logos if available
                 if (team1Logo != null || team2Logo != null) {
                     append("\n🏁 فرق المباراة:\n")
-                    if (team1Logo != null) {
-                        append("• $team1\n")
-                    }
-                    if (team2Logo != null) {
-                        append("• $team2\n")
-                    }
+                    if (team1Logo != null) append("• $team1\n")
+                    if (team2Logo != null) append("• $team2\n")
                 }
             }
 
-            if (time.isNotBlank()) {
-                append("🕒 الوقت: $time\n")
-            }
+            if (time.isNotBlank()) append("🕒 الوقت: $time\n")
+            if (tournament.isNotBlank()) append("🏆 البطولة: $tournament\n")
 
-            if (tournament.isNotBlank()) {
-                append("🏆 البطولة: $tournament\n")
-            }
-
-            // Add status
             when (status) {
                 "live" -> append("🔴 الحالة: البث مباشر الآن\n")
                 "finished" -> append("✅ الحالة: انتهت المباراة\n")
                 else -> append("⏳ الحالة: قادمة\n")
             }
 
-            // Extract match info from table
             val matchTable = document.select("table.table-bordered")
             if (matchTable.isNotEmpty()) {
                 append("\n📋 بطاقة المباراة:\n")
-
-                // Extract table rows
                 matchTable.select("tr").forEach { row ->
                     val header = row.select("th").text().trim()
                     val value = row.select("td").text().trim()
-
                     if (header.isNotBlank() && value.isNotBlank()) {
                         when (header) {
                             "البطولة" -> append("🏆 $header: $value\n")
@@ -272,66 +218,41 @@ class KooraLite : MainAPI() {
                 }
             }
 
-            // Try to find stream quality/links info
             document.select(".video-serv a").forEach { streamLink ->
                 val streamName = streamLink.text().trim()
-                if (streamName.isNotBlank()) {
-                    append("📡 $streamName\n")
-                }
+                if (streamName.isNotBlank()) append("📡 $streamName\n")
             }
 
-            // Add server information if available
             val servers = document.select(".video-serv a")
-            if (servers.isNotEmpty()) {
-                append("\n🔗 السيرفرات المتاحة: ${servers.size}\n")
-            }
+            if (servers.isNotEmpty()) append("\n🔗 السيرفرات المتاحة: ${servers.size}\n")
         }
 
-        // Look for stream links
         val rawStreamLinks = mutableSetOf<String>()
 
-        // Method 1: Look for iframes in the page
         document.select("iframe[src]").forEach { iframe ->
             val srcRaw = iframe.attr("src")
             val src = fixUrl(srcRaw)
-            if (src.isNotBlank()) {
-                // Check for YouTube iframes specifically
-                if (src.contains("youtube.com") || src.contains("youtu.be")) {
-                    rawStreamLinks.add(src)
-                } else if (src.contains("stream")) {
-                    rawStreamLinks.add(src)
-                } else {
-                    rawStreamLinks.add(src)
-                }
-            }
+            if (src.isNotBlank()) rawStreamLinks.add(src)
         }
 
-        // Method 2: Check if URL is already a stream link
         if (actualUrl.contains("stream-in.live") || actualUrl.contains("stream") ||
             actualUrl.contains("albaplayer") || actualUrl.contains("max.mpnh.online")
         ) {
             rawStreamLinks.add(actualUrl)
         }
 
-        // Method 3: Look for video elements
         document.select("video source[src]").forEach { source ->
             val srcRaw = source.attr("src")
             val src = fixUrl(srcRaw)
-            if (src.isNotBlank()) {
-                rawStreamLinks.add(src)
-            }
+            if (src.isNotBlank()) rawStreamLinks.add(src)
         }
 
-        // Method 4: Look for links with streaming keywords
         document.select("a[href*='stream'], a[href*='watch'], a[href*='live']").forEach { link ->
             val hrefRaw = link.attr("href")
             val href = fixUrl(hrefRaw)
-            if (href.isNotBlank()) {
-                rawStreamLinks.add(href)
-            }
+            if (href.isNotBlank()) rawStreamLinks.add(href)
         }
 
-        // Method 5: Look for YouTube embed URLs (and other URLs) in scripts
         document.select("script").forEach { script ->
             val scriptText = script.html()
             val patterns = listOf(
@@ -358,7 +279,6 @@ class KooraLite : MainAPI() {
             }
         }
 
-        // Normalize/clean links and join
         val streamLinks = rawStreamLinks.map { it.trim() }.filter { it.isNotBlank() }.map { fixUrl(it) }.toSet()
 
         val data = if (streamLinks.isNotEmpty()) {
@@ -368,15 +288,11 @@ class KooraLite : MainAPI() {
         }
 
         return newMovieLoadResponse(title, url, TvType.Movie, data) {
-            // Use team1 logo as main poster
             this.posterUrl = poster
-
             this.plot = description.trim()
 
-            // Add tags - extract from table if available
             val tags = mutableListOf("كرة قدم", "رياضة", "مباراة")
 
-            // Try to extract tournament from table
             val matchTable = document.select("table.table-bordered")
             var extractedTournament = tournament
 
@@ -387,40 +303,25 @@ class KooraLite : MainAPI() {
 
                     if (header == "البطولة" && value.isNotBlank()) {
                         extractedTournament = value
-                        // Split tournament names by comma and add each as tag
                         value.split(",").map { it.trim() }.filter { it.isNotBlank() }.forEach { tag ->
-                            if (!tags.contains(tag)) {
-                                tags.add(tag)
-                            }
+                            if (!tags.contains(tag)) tags.add(tag)
                         }
                     }
 
-                    // Add channel as tag
                     if (header == "اسم القناة" && value.isNotBlank() && value != "غير معروف") {
-                        if (!tags.contains(value)) {
-                            tags.add(value)
-                        }
+                        if (!tags.contains(value)) tags.add(value)
                     }
                 }
             } else if (tournament.isNotBlank()) {
                 tags.add(tournament)
             }
 
-            if (status == "live") {
-                tags.add("بث مباشر")
-            }
-
-            // Add team names as tags
-            if (team1.isNotBlank()) {
-                tags.add(team1)
-            }
-            if (team2.isNotBlank()) {
-                tags.add(team2)
-            }
+            if (status == "live") tags.add("بث مباشر")
+            if (team1.isNotBlank()) tags.add(team1)
+            if (team2.isNotBlank()) tags.add(team2)
 
             this.tags = tags
 
-            // Add recommendations
             val recommendations = document.select(".related-posts a, .widget a, .gr-item a").mapNotNull { link ->
                 val recTitle = link.text().trim()
                 val recHref = link.attr("href")
@@ -443,13 +344,11 @@ class KooraLite : MainAPI() {
     ): Boolean {
         var foundLinks = false
 
-        // Check if data contains multiple stream links
         if (data.contains("|||")) {
             val streamLinks = data.split("|||").map { it.trim() }.filter { it.isNotBlank() }.map { fixUrl(it) }
 
             streamLinks.forEach { streamUrl ->
                 try {
-                    // Check if it's a YouTube URL first
                     if (isYouTubeUrl(streamUrl)) {
                         foundLinks = extractYouTubeStream(streamUrl, subtitleCallback, callback) || foundLinks
                     } else {
@@ -457,26 +356,21 @@ class KooraLite : MainAPI() {
                         foundLinks = true
                     }
                 } catch (e: Exception) {
-                    // Try direct extraction
                     tryExtractDirectLink(streamUrl, callback)
                 }
             }
         } else {
-            // Single URL - try to extract from the page
             val dataUrl = fixUrl(data)
             try {
                 val doc = app.get(dataUrl).document
 
-                // First look for alkoora.live iframes (the main stream iframe)
                 doc.select("iframe[src*='alkoora.live'], iframe[src*='stream-in.live']").forEach { iframe ->
                     val src = fixUrl(iframe.attr("src"))
                     if (src.isNotBlank()) {
-                        // Extract from the iframe
                         foundLinks = extractStreamFromIframe(src, dataUrl, subtitleCallback, callback) || foundLinks
                     }
                 }
 
-                // Look for YouTube iframes
                 doc.select("iframe[src*='youtube.com'], iframe[src*='youtu.be']").forEach { iframe ->
                     val src = fixUrl(iframe.attr("src"))
                     if (src.isNotBlank()) {
@@ -484,7 +378,6 @@ class KooraLite : MainAPI() {
                     }
                 }
 
-                // Look for other iframes
                 doc.select("iframe[src]").forEach { iframe ->
                     val src = fixUrl(iframe.attr("src"))
                     if (src.isNotBlank() && !src.contains("alkoora.live") && !src.contains("stream-in.live") &&
@@ -495,7 +388,6 @@ class KooraLite : MainAPI() {
                     }
                 }
 
-                // Look for direct video links
                 doc.select("video source[src]").forEach { source ->
                     val videoUrl = fixUrl(source.attr("src"))
                     if (videoUrl.isNotBlank()) {
@@ -514,16 +406,12 @@ class KooraLite : MainAPI() {
                     }
                 }
 
-                // Look for streaming scripts
                 doc.select("script").forEach { script ->
                     val scriptText = script.html()
-
-                    // Common streaming URL patterns
                     val patterns = listOf(
                         Regex("""(https?://[^\s'"]*\.m3u8[^\s'"]*)"""),
                         Regex("""['"](https?://[^'"]*stream[^'"]*)['"]"""),
                         Regex("""src\s*[:=]\s*['"](https?://[^'"]+)['"]"""),
-                        // YouTube patterns
                         Regex("""youtube\.com/embed/([^"']+)"""),
                         Regex("""youtu\.be/([^"']+)""")
                     )
@@ -533,7 +421,6 @@ class KooraLite : MainAPI() {
                             val found = match.groupValues.getOrNull(1) ?: ""
                             if (found.isNotBlank()) {
                                 if (pattern.pattern.contains("youtube")) {
-                                    // It's a YouTube ID, construct full URL
                                     val youtubeUrl = if (found.startsWith("http")) found else "https://www.youtube.com/watch?v=$found"
                                     foundLinks = extractYouTubeStream(youtubeUrl, subtitleCallback, callback) || foundLinks
                                 } else {
@@ -549,7 +436,6 @@ class KooraLite : MainAPI() {
                 }
 
             } catch (e: Exception) {
-                // Error loading page - try direct URL
                 if (isYouTubeUrl(dataUrl)) {
                     foundLinks = extractYouTubeStream(dataUrl, subtitleCallback, callback) || foundLinks
                 } else {
@@ -557,13 +443,11 @@ class KooraLite : MainAPI() {
                         loadExtractor(dataUrl, mainUrl, subtitleCallback, callback)
                         foundLinks = true
                     } catch (e: Exception) {
-                        // Ignore
                     }
                 }
             }
         }
 
-        // If still no links found, check if URL is from stream-in.live or albaplayer
         if (!foundLinks && (data.contains("stream-in.live") || data.contains("/2025/") ||
                     data.contains("albaplayer") || data.contains("max.mpnh.online"))
         ) {
@@ -571,14 +455,12 @@ class KooraLite : MainAPI() {
                 loadExtractor(fixUrl(data), mainUrl, subtitleCallback, callback)
                 foundLinks = true
             } catch (e: Exception) {
-                // Ignore
             }
         }
 
         return foundLinks
     }
 
-    // Function to extract streams from iframes
     private suspend fun extractStreamFromIframe(
         iframeSrc: String,
         referer: String,
@@ -591,7 +473,6 @@ class KooraLite : MainAPI() {
         try {
             val iframeDoc = app.get(srcFixed, referer = referer).document
 
-            // Method 1: Look for video elements in iframe
             iframeDoc.select("video source[src]").forEach { source ->
                 val videoUrl = fixUrl(source.attr("src"))
                 if (videoUrl.isNotBlank()) {
@@ -610,7 +491,6 @@ class KooraLite : MainAPI() {
                 }
             }
 
-            // Method 2: Look for YouTube iframes in iframe
             iframeDoc.select("iframe[src*='youtube.com'], iframe[src*='youtu.be']").forEach { iframe ->
                 val src = fixUrl(iframe.attr("src"))
                 if (src.isNotBlank()) {
@@ -618,10 +498,8 @@ class KooraLite : MainAPI() {
                 }
             }
 
-            // Method 3: Look for streaming scripts in iframe
             val iframeScripts = iframeDoc.select("script").html()
 
-            // Check for common streaming URL patterns in iframe
             val patterns = listOf(
                 Regex("""(https?://[^\s'"]*\.m3u8[^\s'"]*)"""),
                 Regex("""['"](https?://[^'"]*stream[^'"]*)['"]"""),
@@ -630,7 +508,6 @@ class KooraLite : MainAPI() {
                 Regex("""file\s*[:=]\s*['"](https?://[^'"]+\.m3u8)['"]"""),
                 Regex("""hls\.src\s*=\s*['"]([^'"]+)['"]"""),
                 Regex("""player\.src\s*=\s*['"]([^'"]+)['"]"""),
-                // YouTube patterns
                 Regex("""youtube\.com/embed/([^"']+)"""),
                 Regex("""youtu\.be/([^"']+)""")
             )
@@ -640,7 +517,6 @@ class KooraLite : MainAPI() {
                     val found = match.groupValues.getOrNull(1) ?: ""
                     if (found.isNotBlank()) {
                         if (pattern.pattern.contains("youtube")) {
-                            // It's a YouTube ID, construct full URL
                             val youtubeUrl = if (found.startsWith("http")) found else "https://www.youtube.com/watch?v=$found"
                             foundLinks = extractYouTubeStream(youtubeUrl, subtitleCallback, callback) || foundLinks
                         } else {
@@ -654,7 +530,6 @@ class KooraLite : MainAPI() {
                 }
             }
 
-            // Method 4: Look for nested iframes
             iframeDoc.select("iframe[src]").forEach { nestedIframe ->
                 val nestedSrc = fixUrl(nestedIframe.attr("src"))
                 if (nestedSrc.isNotBlank()) {
@@ -662,23 +537,19 @@ class KooraLite : MainAPI() {
                 }
             }
 
-            // Method 5: Try to load the iframe URL directly as a stream
             if (!foundLinks) {
                 try {
                     loadExtractor(srcFixed, referer, subtitleCallback, callback)
                     foundLinks = true
                 } catch (e: Exception) {
-                    // Ignore
                 }
             }
 
         } catch (e: Exception) {
-            // If iframe extraction fails, try the iframe URL directly
             try {
                 loadExtractor(srcFixed, referer, subtitleCallback, callback)
                 foundLinks = true
             } catch (e: Exception) {
-                // Ignore
             }
         }
 
@@ -688,7 +559,6 @@ class KooraLite : MainAPI() {
     private suspend fun tryExtractDirectLink(url: String, callback: (ExtractorLink) -> Unit) {
         try {
             val fixed = fixUrl(url)
-            // Check if it's a direct video URL
             if (fixed.contains(".m3u8") || fixed.contains(".mp4") || fixed.contains(".mkv")) {
                 callback.invoke(
                     newExtractorLink(
@@ -703,48 +573,38 @@ class KooraLite : MainAPI() {
                 )
             }
         } catch (e: Exception) {
-            // Ignore errors
         }
     }
 
-    // Helper function to check if URL is YouTube
     private fun isYouTubeUrl(url: String): Boolean {
         return url.contains("youtube.com") || url.contains("youtu.be")
     }
 
-    // Helper function to extract YouTube streams
     private suspend fun extractYouTubeStream(
         url: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
-            // Extract YouTube video ID
             val videoId = extractYouTubeId(url)
             if (videoId != null) {
-                // Construct proper YouTube watch URL
                 val youtubeUrl = "https://www.youtube.com/watch?v=$videoId"
-                // Use CloudStream's YouTube extractor
                 loadExtractor(youtubeUrl, mainUrl, subtitleCallback, callback)
                 return true
             } else {
-                // fallback: try direct URL in case url is already a watch URL
                 loadExtractor(url, mainUrl, subtitleCallback, callback)
                 return true
             }
         } catch (e: Exception) {
-            // Try direct URL if extraction fails
             try {
                 loadExtractor(url, mainUrl, subtitleCallback, callback)
                 return true
             } catch (e: Exception) {
-                // Ignore
             }
         }
         return false
     }
 
-    // Helper function to extract YouTube video ID
     private fun extractYouTubeId(url: String): String? {
         val patterns = listOf(
             Regex("""youtube\.com/embed/([^?&]+)"""),
@@ -769,190 +629,5 @@ class KooraLite : MainAPI() {
             url.startsWith("/") -> "$mainUrl$url"
             else -> "$mainUrl/$url"
         }
-    }
-}
-
-/**
- * KooraActivity:
- * - Android Activity wrapper using ExoPlayer to play HLS streams.
- * - Tries a shuffled list of hosts and falls back to the next host on playback errors.
- *
- * Notes:
- * - This Activity is provided here for convenience; ensure your project has the Android
- *   and ExoPlayer dependencies and that this file is included in an Android module.
- *
- * - Add to AndroidManifest.xml:
- *     <uses-permission android:name="android.permission.INTERNET" />
- *
- * - Add dependency (app/build.gradle):
- *     implementation "com.google.android.exoplayer:exoplayer:2.19.0"
- */
-class KooraActivity : AppCompatActivity() {
-
-    // Replace or extend these hosts with real ones
-    private val servers = listOf(
-        "cdn1.4job.online",
-        "cdn2.4job.online"
-    )
-
-    private lateinit var playerView: PlayerView
-    private var player: ExoPlayer? = null
-
-    // order in which we'll try servers (shuffled at start)
-    private lateinit var tryOrder: MutableList<String>
-    private var currentIndex = 0
-
-    private lateinit var messageOverlay: TextView
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        // Prepare try order (shuffle to pick random first server)
-        tryOrder = servers.shuffled(Random(System.currentTimeMillis())).toMutableList()
-
-        // Build UI programmatically
-        val container = FrameLayout(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        }
-
-        playerView = PlayerView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            useController = true
-            controllerShowTimeoutMs = 3000
-        }
-        container.addView(playerView)
-
-        // A simple overlay for messages (errors, status)
-        messageOverlay = TextView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).also {
-                it.gravity = Gravity.CENTER
-            }
-            setBackgroundColor(0x99000000.toInt())
-            setTextColor(0xFFFFFFFF.toInt())
-            text = ""
-            textSize = 16f
-            setPadding(24, 12, 24, 12)
-            visibility = android.view.View.GONE
-        }
-        container.addView(messageOverlay)
-
-        setContentView(container)
-    }
-
-    override fun onStart() {
-        super.onStart()
-        initializePlayerIfNeeded()
-        // start playing from the first server in order
-        currentIndex = 0
-        playCurrentServer()
-    }
-
-    override fun onStop() {
-        super.onStop()
-        releasePlayer()
-    }
-
-    private fun initializePlayerIfNeeded() {
-        if (player != null) return
-
-        player = ExoPlayer.Builder(this).build().also { exo ->
-            playerView.player = exo
-            exo.repeatMode = Player.REPEAT_MODE_OFF
-            exo.playWhenReady = true
-
-            exo.addListener(object : Player.Listener {
-                override fun onPlayerError(error: PlaybackException) {
-                    // Log and try next server
-                    // PlaybackException contains information about cause
-                    tryNextServer("Playback error: ${error.message}")
-                }
-
-                override fun onPlaybackStateChanged(state: Int) {
-                    // Hide overlay on ready
-                    if (state == Player.STATE_READY) {
-                        hideMessage()
-                    }
-                }
-            })
-        }
-    }
-
-    private fun playCurrentServer() {
-        if (currentIndex >= tryOrder.size) {
-            // All servers failed
-            showMessage("تعذر تشغيل البث — الرجاء المحاولة لاحقاً.")
-            return
-        }
-
-        val host = tryOrder[currentIndex]
-        val hlsUrl = buildHlsUrl(host)
-        showMessage("Connecting to $host ...")
-
-        val mediaSource = buildHlsMediaSource(this, Uri.parse(hlsUrl))
-        player?.setMediaSource(mediaSource)
-        player?.prepare()
-        player?.playWhenReady = true
-    }
-
-    private fun tryNextServer(reason: String? = null) {
-        // show brief reason then move on
-        reason?.let { showMessage("خطأ على الخادم ${tryOrder[currentIndex]}: ${it}\nالمحاولة التالية...") }
-
-        currentIndex++
-        if (currentIndex < tryOrder.size) {
-            // small delay before trying next server to avoid immediate rapid retries
-            playerView.postDelayed({
-                playCurrentServer()
-            }, 800)
-        } else {
-            // no servers left
-            playerView.post {
-                showMessage("جميع الخوادم فشلت. الرجاء التحقق من الروابط أو المحاولة لاحقاً.")
-            }
-        }
-    }
-
-    private fun buildHlsUrl(host: String): String {
-        // Use same path as original page
-        return "https://$host/live/mbc/playlist.m3u8"
-    }
-
-    private fun buildHlsMediaSource(context: Context, uri: Uri): MediaSource {
-        // Default HTTP factory with reasonable timeouts; allow cross-protocol redirects if needed
-        val httpFactory = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            // Optionally set a user agent and timeouts:
-            // .setUserAgent("KooraPlayer/1.0")
-            // .setConnectTimeoutMs(8_000)
-            // .setReadTimeoutMs(8_000)
-        val mediaItem = MediaItem.fromUri(uri)
-        return HlsMediaSource.Factory(httpFactory).createMediaSource(mediaItem)
-    }
-
-    private fun releasePlayer() {
-        player?.let {
-            it.removeListener(object : Player.Listener {}) // safe no-op
-            it.release()
-        }
-        player = null
-    }
-
-    private fun showMessage(text: String) {
-        messageOverlay.text = text
-        messageOverlay.visibility = android.view.View.VISIBLE
-        // keep overlay visible until replaced or hidden by playback ready
-    }
-
-    private fun hideMessage() {
-        messageOverlay.visibility = android.view.View.GONE
     }
 }
