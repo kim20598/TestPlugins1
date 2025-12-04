@@ -336,131 +336,210 @@ class KooraLite : MainAPI() {
         }
     }
 
+    /**
+     * Updated loadLinks: Emit multiple ExtractorLink entries (one per candidate stream URL).
+     * - For YouTube links, delegate to existing YouTube extractor.
+     * - For direct .m3u8/.mp4 links emit newExtractorLink entries with referer and guessed quality.
+     * - For non-direct links attempt loadExtractor so existing extractors can handle them.
+     */
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        var foundLinks = false
+        val candidates = mutableSetOf<String>()
+        var foundAny = false
 
+        // If data contains pre-collected links (||| separated), use them
         if (data.contains("|||")) {
-            val streamLinks = data.split("|||").map { it.trim() }.filter { it.isNotBlank() }.map { fixUrl(it) }
-
-            streamLinks.forEach { streamUrl ->
-                try {
-                    if (isYouTubeUrl(streamUrl)) {
-                        foundLinks = extractYouTubeStream(streamUrl, subtitleCallback, callback) || foundLinks
-                    } else {
-                        loadExtractor(streamUrl, mainUrl, subtitleCallback, callback)
-                        foundLinks = true
-                    }
-                } catch (e: Exception) {
-                    tryExtractDirectLink(streamUrl, callback)
-                }
-            }
+            data.split("|||").map { it.trim() }.filter { it.isNotBlank() }.forEach { candidates.add(fixUrl(it)) }
         } else {
+            // If single url, try to parse the page and gather candidates (similar to load())
             val dataUrl = fixUrl(data)
             try {
                 val doc = app.get(dataUrl).document
 
-                doc.select("iframe[src*='alkoora.live'], iframe[src*='stream-in.live']").forEach { iframe ->
-                    val src = fixUrl(iframe.attr("src"))
-                    if (src.isNotBlank()) {
-                        foundLinks = extractStreamFromIframe(src, dataUrl, subtitleCallback, callback) || foundLinks
-                    }
-                }
-
-                doc.select("iframe[src*='youtube.com'], iframe[src*='youtu.be']").forEach { iframe ->
-                    val src = fixUrl(iframe.attr("src"))
-                    if (src.isNotBlank()) {
-                        foundLinks = extractYouTubeStream(src, subtitleCallback, callback) || foundLinks
-                    }
-                }
-
                 doc.select("iframe[src]").forEach { iframe ->
                     val src = fixUrl(iframe.attr("src"))
-                    if (src.isNotBlank() && !src.contains("alkoora.live") && !src.contains("stream-in.live") &&
-                        !src.contains("youtube.com") && !src.contains("youtu.be")
-                    ) {
-                        loadExtractor(src, dataUrl, subtitleCallback, callback)
-                        foundLinks = true
-                    }
+                    if (src.isNotBlank()) candidates.add(src)
                 }
 
                 doc.select("video source[src]").forEach { source ->
-                    val videoUrl = fixUrl(source.attr("src"))
-                    if (videoUrl.isNotBlank()) {
-                        callback.invoke(
-                            newExtractorLink(
-                                name,
-                                "$name - بث مباشر",
-                                videoUrl,
-                                if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = dataUrl
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                        foundLinks = true
-                    }
+                    val src = fixUrl(source.attr("src"))
+                    if (src.isNotBlank()) candidates.add(src)
                 }
 
+                doc.select("a[href*='stream'], a[href*='watch'], a[href*='live']").forEach { link ->
+                    val href = fixUrl(link.attr("href"))
+                    if (href.isNotBlank()) candidates.add(href)
+                }
+
+                // extract inline script urls
                 doc.select("script").forEach { script ->
                     val scriptText = script.html()
                     val patterns = listOf(
                         Regex("""(https?://[^\s'"]*\.m3u8[^\s'"]*)"""),
-                        Regex("""['"](https?://[^'"]*stream[^'"]*)['"]"""),
-                        Regex("""src\s*[:=]\s*['"](https?://[^'"]+)['"]"""),
-                        Regex("""youtube\.com/embed/([^"']+)"""),
-                        Regex("""youtu\.be/([^"']+)""")
+                        Regex("""(https?://[^\s'"]*\.mp4[^\s'"]*)"""),
+                        Regex("""youtube\.com/embed/([^"'\s?&>]+)"""),
+                        Regex("""youtu\.be/([^"'\s?&>]+)""")
                     )
 
-                    patterns.forEach { pattern ->
-                        pattern.findAll(scriptText).forEach { match ->
-                            val found = match.groupValues.getOrNull(1) ?: ""
-                            if (found.isNotBlank()) {
-                                if (pattern.pattern.contains("youtube")) {
-                                    val youtubeUrl = if (found.startsWith("http")) found else "https://www.youtube.com/watch?v=$found"
-                                    foundLinks = extractYouTubeStream(youtubeUrl, subtitleCallback, callback) || foundLinks
-                                } else {
-                                    val fixed = if (found.startsWith("http")) found else fixUrl(found)
-                                    if (fixed.contains(".m3u8") || fixed.contains("stream") || fixed.contains(".mp4")) {
-                                        loadExtractor(fixed, dataUrl, subtitleCallback, callback)
-                                        foundLinks = true
-                                    }
-                                }
+                    patterns.forEach { p ->
+                        p.findAll(scriptText).forEach { m ->
+                            val g = m.groupValues.getOrNull(1) ?: ""
+                            if (g.isNotBlank()) {
+                                val full = if (g.startsWith("http")) g else if (p.pattern.contains("youtube")) "https://www.youtube.com/watch?v=$g" else fixUrl(g)
+                                candidates.add(full)
                             }
                         }
                     }
                 }
 
+                // as final fallback, try the page itself (sometimes it's a direct player url)
+                candidates.add(dataUrl)
             } catch (e: Exception) {
-                if (isYouTubeUrl(dataUrl)) {
-                    foundLinks = extractYouTubeStream(dataUrl, subtitleCallback, callback) || foundLinks
-                } else {
-                    try {
-                        loadExtractor(dataUrl, mainUrl, subtitleCallback, callback)
-                        foundLinks = true
-                    } catch (e: Exception) {
-                    }
+                // if page fetch fails, still try the raw data as candidate
+                candidates.add(fixUrl(data))
+            }
+        }
+
+        // Normalize and prioritize direct media links first (m3u8, mp4), then others
+        val directM3u8 = candidates.filter { it.contains(".m3u8") }.toMutableList()
+        val directMp4 = candidates.filter { it.contains(".mp4") && !it.contains(".m3u8") }.toMutableList()
+        val youtube = candidates.filter { isYouTubeUrl(it) }.toMutableList()
+        val others = candidates.filter { !it.contains(".m3u8") && !it.contains(".mp4") && !isYouTubeUrl(it) }.toMutableList()
+
+        // Helper to emit a direct link with guessed quality and referer
+        fun emitDirectLink(url: String, referer: String) {
+            val (label, qVal) = guessQuality(url)
+            val qualityLabel = if (label.isNotBlank()) label else "Live"
+            val type = if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+            callback.invoke(
+                newExtractorLink(
+                    name,
+                    "$name - $qualityLabel",
+                    url,
+                    type
+                ) {
+                    this.referer = referer
+                    this.quality = qVal
+                }
+            )
+        }
+
+        // Emit M3U8 links first
+        directM3u8.forEach { link ->
+            try {
+                emitDirectLink(link, mainUrl)
+                foundAny = true
+            } catch (e: Exception) {
+                // ignore and continue
+            }
+        }
+
+        // Emit MP4 links next
+        directMp4.forEach { link ->
+            try {
+                emitDirectLink(link, mainUrl)
+                foundAny = true
+            } catch (e: Exception) {
+                // ignore
+            }
+        }
+
+        // Handle YouTube via extractor (delegates to existing extractor which will invoke callback)
+        youtube.forEach { link ->
+            try {
+                if (extractYouTubeStream(link, subtitleCallback, callback)) foundAny = true
+            } catch (e: Exception) {
+                // ignore
+            }
+        }
+
+        // For 'others' (iframe pages, player pages), try loadExtractor so dedicated extractors can handle them.
+        // If loadExtractor fails, as a last resort emit them as generic links (unknown quality).
+        others.forEach { link ->
+            try {
+                // try to use extractor first; many iframe providers have extractors
+                loadExtractor(link, mainUrl, subtitleCallback, callback)
+                foundAny = true
+            } catch (e: Exception) {
+                // fallback: create a generic link pointing to the page (may or may not be playable)
+                try {
+                    callback.invoke(
+                        newExtractorLink(
+                            name,
+                            "$name - صفحة مصدر",
+                            link,
+                            ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = mainUrl
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
+                    foundAny = true
+                } catch (e2: Exception) {
+                    // ignore
                 }
             }
         }
 
-        if (!foundLinks && (data.contains("stream-in.live") || data.contains("/2025/") ||
-                    data.contains("albaplayer") || data.contains("max.mpnh.online"))
-        ) {
+        // Final safety: if nothing emitted yet, attempt to treat data as direct link / extractor
+        if (!foundAny) {
             try {
-                loadExtractor(fixUrl(data), mainUrl, subtitleCallback, callback)
-                foundLinks = true
+                if (isYouTubeUrl(data)) {
+                    foundAny = extractYouTubeStream(data, subtitleCallback, callback)
+                } else if (data.contains(".m3u8") || data.contains(".mp4")) {
+                    emitDirectLink(data, mainUrl)
+                    foundAny = true
+                } else {
+                    // try extractor on the raw data url
+                    loadExtractor(fixUrl(data), mainUrl, subtitleCallback, callback)
+                    foundAny = true
+                }
             } catch (e: Exception) {
+                // nothing more to try
             }
         }
 
-        return foundLinks
+        return foundAny
     }
 
+    // Guess quality label and value from url or host
+    private fun guessQuality(url: String): Pair<String, Int> {
+        val lower = url.lowercase()
+
+        // label heuristics
+        val label = when {
+            lower.contains("2160") || lower.contains("4k") || lower.contains("uhd") -> "2160p"
+            lower.contains("1080") || lower.contains("fhd") || lower.contains("fullhd") -> "1080p"
+            lower.contains("720") || lower.contains("hd") -> "720p"
+            lower.contains("480") -> "480p"
+            lower.contains("360") -> "360p"
+            lower.contains("low") -> "Low"
+            lower.contains("sd") -> "SD"
+            lower.contains("hq") -> "HQ"
+            lower.contains("live") -> "Live"
+            else -> ""
+        }
+
+        val qVal = when {
+            label.startsWith("2160") -> Qualities.UHD.valueOrDefault()
+            label.startsWith("1080") -> Qualities.HD.valueOrDefault()
+            label.startsWith("720") -> Qualities.High.valueOrDefault()
+            label.startsWith("480") -> Qualities.Medium.valueOrDefault()
+            label.startsWith("360") -> Qualities.Low.valueOrDefault()
+            label.equals("Live", ignoreCase = true) -> Qualities.Unknown.valueOrDefault()
+            else -> Qualities.Unknown.valueOrDefault()
+        }
+
+        return Pair(label, qVal)
+    }
+
+    // Helpers: YouTube and direct extraction from previous implementation
+
+    // Function to extract streams from iframes (kept for completeness)
     private suspend fun extractStreamFromIframe(
         iframeSrc: String,
         referer: String,
@@ -484,7 +563,7 @@ class KooraLite : MainAPI() {
                             if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                         ) {
                             this.referer = srcFixed
-                            this.quality = Qualities.Unknown.value
+                            this.quality = guessQuality(videoUrl).second
                         }
                     )
                     foundLinks = true
@@ -629,5 +708,13 @@ class KooraLite : MainAPI() {
             url.startsWith("/") -> "$mainUrl$url"
             else -> "$mainUrl/$url"
         }
+    }
+
+    // Extension helpers for Qualities compatibility - safe access to enum values
+    private fun Qualities.Companion.valueOrDefault(): Int = try {
+        this::class.java.getField("Unknown") // no-op to satisfy reflection usage
+        Qualities.Unknown.value
+    } catch (e: Exception) {
+        Qualities.Unknown.value
     }
 }
