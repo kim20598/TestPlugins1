@@ -360,23 +360,23 @@ class KooraLite : MainAPI() {
             try {
                 val doc = app.get(dataUrl).document
 
-                doc.select("iframe[src]").forEach { iframe ->
+                for (iframe in doc.select("iframe[src]")) {
                     val src = fixUrl(iframe.attr("src"))
                     if (src.isNotBlank()) candidates.add(src)
                 }
 
-                doc.select("video source[src]").forEach { source ->
+                for (source in doc.select("video source[src]")) {
                     val src = fixUrl(source.attr("src"))
                     if (src.isNotBlank()) candidates.add(src)
                 }
 
-                doc.select("a[href*='stream'], a[href*='watch'], a[href*='live']").forEach { link ->
+                for (link in doc.select("a[href*='stream'], a[href*='watch'], a[href*='live']")) {
                     val href = fixUrl(link.attr("href"))
                     if (href.isNotBlank()) candidates.add(href)
                 }
 
                 // extract inline script urls
-                doc.select("script").forEach { script ->
+                for (script in doc.select("script")) {
                     val scriptText = script.html()
                     val patterns = listOf(
                         Regex("""(https?://[^\s'"]*\.m3u8[^\s'"]*)"""),
@@ -385,7 +385,7 @@ class KooraLite : MainAPI() {
                         Regex("""youtu\.be/([^"'\s?&>]+)""")
                     )
 
-                    patterns.forEach { p ->
+                    for (p in patterns) {
                         p.findAll(scriptText).forEach { m ->
                             val g = m.groupValues.getOrNull(1) ?: ""
                             if (g.isNotBlank()) {
@@ -429,7 +429,7 @@ class KooraLite : MainAPI() {
         }
 
         // Emit M3U8 links first
-        directM3u8.forEach { link ->
+        for (link in directM3u8) {
             try {
                 emitDirectLink(link, mainUrl)
                 foundAny = true
@@ -439,7 +439,7 @@ class KooraLite : MainAPI() {
         }
 
         // Emit MP4 links next
-        directMp4.forEach { link ->
+        for (link in directMp4) {
             try {
                 emitDirectLink(link, mainUrl)
                 foundAny = true
@@ -449,7 +449,7 @@ class KooraLite : MainAPI() {
         }
 
         // Handle YouTube via extractor (delegates to existing extractor which will invoke callback)
-        youtube.forEach { link ->
+        for (link in youtube) {
             try {
                 if (extractYouTubeStream(link, subtitleCallback, callback)) foundAny = true
             } catch (e: Exception) {
@@ -459,7 +459,7 @@ class KooraLite : MainAPI() {
 
         // For 'others' (iframe pages, player pages), try loadExtractor so dedicated extractors can handle them.
         // If loadExtractor fails, as a last resort emit them as generic links (unknown quality).
-        others.forEach { link ->
+        for (link in others) {
             try {
                 // try to use extractor first; many iframe providers have extractors
                 loadExtractor(link, mainUrl, subtitleCallback, callback)
@@ -524,20 +524,11 @@ class KooraLite : MainAPI() {
             else -> ""
         }
 
-        val qVal = when {
-            label.startsWith("2160") -> Qualities.UHD.valueOrDefault()
-            label.startsWith("1080") -> Qualities.HD.valueOrDefault()
-            label.startsWith("720") -> Qualities.High.valueOrDefault()
-            label.startsWith("480") -> Qualities.Medium.valueOrDefault()
-            label.startsWith("360") -> Qualities.Low.valueOrDefault()
-            label.equals("Live", ignoreCase = true) -> Qualities.Unknown.valueOrDefault()
-            else -> Qualities.Unknown.valueOrDefault()
-        }
+        // Use Unknown quality for portability — safer than referencing possibly-missing enum names.
+        val qVal = Qualities.Unknown.value
 
         return Pair(label, qVal)
     }
-
-    // Helpers: YouTube and direct extraction from previous implementation
 
     // Function to extract streams from iframes (kept for completeness)
     private suspend fun extractStreamFromIframe(
@@ -552,7 +543,7 @@ class KooraLite : MainAPI() {
         try {
             val iframeDoc = app.get(srcFixed, referer = referer).document
 
-            iframeDoc.select("video source[src]").forEach { source ->
+            for (source in iframeDoc.select("video source[src]")) {
                 val videoUrl = fixUrl(source.attr("src"))
                 if (videoUrl.isNotBlank()) {
                     callback.invoke(
@@ -570,7 +561,7 @@ class KooraLite : MainAPI() {
                 }
             }
 
-            iframeDoc.select("iframe[src*='youtube.com'], iframe[src*='youtu.be']").forEach { iframe ->
+            for (iframe in iframeDoc.select("iframe[src*='youtube.com'], iframe[src*='youtu.be']")) {
                 val src = fixUrl(iframe.attr("src"))
                 if (src.isNotBlank()) {
                     foundLinks = extractYouTubeStream(src, subtitleCallback, callback) || foundLinks
@@ -591,7 +582,7 @@ class KooraLite : MainAPI() {
                 Regex("""youtu\.be/([^"']+)""")
             )
 
-            patterns.forEach { pattern ->
+            for (pattern in patterns) {
                 pattern.findAll(iframeScripts).forEach { match ->
                     val found = match.groupValues.getOrNull(1) ?: ""
                     if (found.isNotBlank()) {
@@ -609,7 +600,7 @@ class KooraLite : MainAPI() {
                 }
             }
 
-            iframeDoc.select("iframe[src]").forEach { nestedIframe ->
+            for (nestedIframe in iframeDoc.select("iframe[src]")) {
                 val nestedSrc = fixUrl(nestedIframe.attr("src"))
                 if (nestedSrc.isNotBlank()) {
                     foundLinks = extractStreamFromIframe(nestedSrc, srcFixed, subtitleCallback, callback) || foundLinks
@@ -708,13 +699,5 @@ class KooraLite : MainAPI() {
             url.startsWith("/") -> "$mainUrl$url"
             else -> "$mainUrl/$url"
         }
-    }
-
-    // Extension helpers for Qualities compatibility - safe access to enum values
-    private fun Qualities.Companion.valueOrDefault(): Int = try {
-        this::class.java.getField("Unknown") // no-op to satisfy reflection usage
-        Qualities.Unknown.value
-    } catch (e: Exception) {
-        Qualities.Unknown.value
     }
 }
