@@ -5,6 +5,25 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
+// Android / ExoPlayer imports (KooraActivity appended below)
+import android.content.Context
+import android.net.Uri
+import android.os.Bundle
+import android.view.Gravity
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
+import com.google.android.exoplayer2.ExoPlayer
+import com.google.android.exoplayer2.MediaItem
+import com.google.android.exoplayer2.PlaybackException
+import com.google.android.exoplayer2.Player
+import com.google.android.exoplayer2.ui.PlayerView
+import com.google.android.exoplayer2.upstream.DefaultHttpDataSource
+import com.google.android.exoplayer2.source.hls.HlsMediaSource
+import com.google.android.exoplayer2.source.MediaSource
+import kotlin.random.Random
+
 class KooraLite : MainAPI() {
     override var mainUrl = "https://www.kooralite.live"
     override var name = "KooraLite - كورة لايت"
@@ -750,5 +769,190 @@ class KooraLite : MainAPI() {
             url.startsWith("/") -> "$mainUrl$url"
             else -> "$mainUrl/$url"
         }
+    }
+}
+
+/**
+ * KooraActivity:
+ * - Android Activity wrapper using ExoPlayer to play HLS streams.
+ * - Tries a shuffled list of hosts and falls back to the next host on playback errors.
+ *
+ * Notes:
+ * - This Activity is provided here for convenience; ensure your project has the Android
+ *   and ExoPlayer dependencies and that this file is included in an Android module.
+ *
+ * - Add to AndroidManifest.xml:
+ *     <uses-permission android:name="android.permission.INTERNET" />
+ *
+ * - Add dependency (app/build.gradle):
+ *     implementation "com.google.android.exoplayer:exoplayer:2.19.0"
+ */
+class KooraActivity : AppCompatActivity() {
+
+    // Replace or extend these hosts with real ones
+    private val servers = listOf(
+        "cdn1.4job.online",
+        "cdn2.4job.online"
+    )
+
+    private lateinit var playerView: PlayerView
+    private var player: ExoPlayer? = null
+
+    // order in which we'll try servers (shuffled at start)
+    private lateinit var tryOrder: MutableList<String>
+    private var currentIndex = 0
+
+    private lateinit var messageOverlay: TextView
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // Prepare try order (shuffle to pick random first server)
+        tryOrder = servers.shuffled(Random(System.currentTimeMillis())).toMutableList()
+
+        // Build UI programmatically
+        val container = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        playerView = PlayerView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            useController = true
+            controllerShowTimeoutMs = 3000
+        }
+        container.addView(playerView)
+
+        // A simple overlay for messages (errors, status)
+        messageOverlay = TextView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).also {
+                it.gravity = Gravity.CENTER
+            }
+            setBackgroundColor(0x99000000.toInt())
+            setTextColor(0xFFFFFFFF.toInt())
+            text = ""
+            textSize = 16f
+            setPadding(24, 12, 24, 12)
+            visibility = android.view.View.GONE
+        }
+        container.addView(messageOverlay)
+
+        setContentView(container)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        initializePlayerIfNeeded()
+        // start playing from the first server in order
+        currentIndex = 0
+        playCurrentServer()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        releasePlayer()
+    }
+
+    private fun initializePlayerIfNeeded() {
+        if (player != null) return
+
+        player = ExoPlayer.Builder(this).build().also { exo ->
+            playerView.player = exo
+            exo.repeatMode = Player.REPEAT_MODE_OFF
+            exo.playWhenReady = true
+
+            exo.addListener(object : Player.Listener {
+                override fun onPlayerError(error: PlaybackException) {
+                    // Log and try next server
+                    // PlaybackException contains information about cause
+                    tryNextServer("Playback error: ${error.message}")
+                }
+
+                override fun onPlaybackStateChanged(state: Int) {
+                    // Hide overlay on ready
+                    if (state == Player.STATE_READY) {
+                        hideMessage()
+                    }
+                }
+            })
+        }
+    }
+
+    private fun playCurrentServer() {
+        if (currentIndex >= tryOrder.size) {
+            // All servers failed
+            showMessage("تعذر تشغيل البث — الرجاء المحاولة لاحقاً.")
+            return
+        }
+
+        val host = tryOrder[currentIndex]
+        val hlsUrl = buildHlsUrl(host)
+        showMessage("Connecting to $host ...")
+
+        val mediaSource = buildHlsMediaSource(this, Uri.parse(hlsUrl))
+        player?.setMediaSource(mediaSource)
+        player?.prepare()
+        player?.playWhenReady = true
+    }
+
+    private fun tryNextServer(reason: String? = null) {
+        // show brief reason then move on
+        reason?.let { showMessage("خطأ على الخادم ${tryOrder[currentIndex]}: ${it}\nالمحاولة التالية...") }
+
+        currentIndex++
+        if (currentIndex < tryOrder.size) {
+            // small delay before trying next server to avoid immediate rapid retries
+            playerView.postDelayed({
+                playCurrentServer()
+            }, 800)
+        } else {
+            // no servers left
+            playerView.post {
+                showMessage("جميع الخوادم فشلت. الرجاء التحقق من الروابط أو المحاولة لاحقاً.")
+            }
+        }
+    }
+
+    private fun buildHlsUrl(host: String): String {
+        // Use same path as original page
+        return "https://$host/live/mbc/playlist.m3u8"
+    }
+
+    private fun buildHlsMediaSource(context: Context, uri: Uri): MediaSource {
+        // Default HTTP factory with reasonable timeouts; allow cross-protocol redirects if needed
+        val httpFactory = DefaultHttpDataSource.Factory()
+            .setAllowCrossProtocolRedirects(true)
+            // Optionally set a user agent and timeouts:
+            // .setUserAgent("KooraPlayer/1.0")
+            // .setConnectTimeoutMs(8_000)
+            // .setReadTimeoutMs(8_000)
+        val mediaItem = MediaItem.fromUri(uri)
+        return HlsMediaSource.Factory(httpFactory).createMediaSource(mediaItem)
+    }
+
+    private fun releasePlayer() {
+        player?.let {
+            it.removeListener(object : Player.Listener {}) // safe no-op
+            it.release()
+        }
+        player = null
+    }
+
+    private fun showMessage(text: String) {
+        messageOverlay.text = text
+        messageOverlay.visibility = android.view.View.VISIBLE
+        // keep overlay visible until replaced or hidden by playback ready
+    }
+
+    private fun hideMessage() {
+        messageOverlay.visibility = android.view.View.GONE
     }
 }
