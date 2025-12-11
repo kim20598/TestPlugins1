@@ -15,22 +15,6 @@ class Catsuka : MainAPI() {
         TvType.Anime,
         TvType.OVA
     )
-
-    // Essential headers to avoid CGU page
-    override fun getHeaders(): Map<String, String> {
-        return mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language" to "en-US,en;q=0.9,fr;q=0.8",
-            "Accept-Encoding" to "gzip, deflate, br",
-            "Connection" to "keep-alive",
-            "Upgrade-Insecure-Requests" to "1",
-            "Sec-Fetch-Dest" to "document",
-            "Sec-Fetch-Mode" to "navigate",
-            "Sec-Fetch-Site" to "same-origin",
-            "Cache-Control" to "max-age=0"
-        )
-    }
     
     private val playerUrl = "$mainUrl/player"
     private val categoriesUrl = "$mainUrl/player/categories/"
@@ -61,18 +45,31 @@ class Catsuka : MainAPI() {
         "$mainUrl/player/categorie/catsukatrailers" to "🎞️ Movie Trailers"
     )
 
-    // Helper function to fetch pages with proper headers
-    private suspend fun getDocument(url: String, referer: String = playerUrl): Element {
-        val headers = getHeaders().toMutableMap()
-        headers["Referer"] = referer
-        
-        // Add some cookies that might help
-        val cookies = mapOf(
-            "PHPSESSID" to "",
-            "cookieconsent_status" to "dismiss"
+    // Browser headers to avoid CGU page
+    private fun getBrowserHeaders(referer: String = ""): Map<String, String> {
+        val headers = mutableMapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language" to "en-US,en;q=0.9,fr;q=0.8",
+            "Accept-Encoding" to "gzip, deflate, br",
+            "Connection" to "keep-alive",
+            "Upgrade-Insecure-Requests" to "1",
+            "Sec-Fetch-Dest" to "document",
+            "Sec-Fetch-Mode" to "navigate",
+            "Sec-Fetch-Site" to "same-origin",
+            "Cache-Control" to "max-age=0"
         )
         
-        return app.get(url, headers = headers, cookies = cookies).document
+        if (referer.isNotEmpty()) {
+            headers["Referer"] = referer
+        }
+        
+        return headers
+    }
+
+    // Helper function to fetch pages with proper headers
+    private suspend fun getDocument(url: String, referer: String = playerUrl): Element {
+        return app.get(url, headers = getBrowserHeaders(referer)).document
     }
 
     override suspend fun getMainPage(
@@ -82,129 +79,60 @@ class Catsuka : MainAPI() {
         val url = request.data
         
         return try {
-            when {
-                // Home page
-                url == playerUrl -> getHomePageSections(page, request.name)
+            val pageUrl = if (page > 1) "$url?page=$page" else url
+            val document = getDocument(pageUrl, playerUrl)
+            
+            // Check if we got CGU page
+            val pageText = document.text()
+            if (pageText.contains("General conditions of use") || 
+                pageText.contains("Conditions d'utilisation") ||
+                document.select("h1, h2").any { 
+                    it.text().contains("CGU", ignoreCase = true) || 
+                    it.text().contains("Conditions", ignoreCase = true) 
+                }) {
                 
-                // Categories page
-                url == categoriesUrl -> getAllCategoriesPage()
+                // Try alternative approach with minimal headers
+                val altDoc = app.get(pageUrl, headers = mapOf(
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )).document
                 
-                // Specific category or section
-                else -> {
-                    val pageUrl = if (page > 1) "$url?page=$page" else url
-                    val document = getDocument(pageUrl, playerUrl)
-                    
-                    // Check if we got CGU page
-                    if (document.select("h1, h2").any { 
-                        it.text().contains("CGU", ignoreCase = true) || 
-                        it.text().contains("Conditions", ignoreCase = true) 
-                    }) {
-                        // Try again with different headers
-                        val doc2 = app.get(pageUrl, headers = mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            "Referer" to playerUrl
-                        )).document
-                        return processPage(doc2, request.name, url)
-                    }
-                    
-                    processPage(document, request.name, url)
-                }
+                val items = extractItemsFromDocument(altDoc, url)
+                return newHomePageResponse(
+                    request.name,
+                    items.distinctBy { it.url },
+                    hasNext = items.isNotEmpty() && url != playerUrl
+                )
             }
+            
+            val items = extractItemsFromDocument(document, url)
+            newHomePageResponse(
+                request.name,
+                items.distinctBy { it.url },
+                hasNext = items.isNotEmpty() && url != playerUrl
+            )
+            
         } catch (e: Exception) {
             newHomePageResponse(request.name, emptyList())
         }
     }
 
-    private fun processPage(document: Element, name: String, url: String): HomePageResponse {
-        val items = extractItemsFromDocument(document, url)
-        return newHomePageResponse(
-            name,
-            items.distinctBy { it.url },
-            hasNext = items.isNotEmpty() && url != playerUrl
-        )
-    }
-
-    private suspend fun getHomePageSections(page: Int, sectionName: String): HomePageResponse {
-        if (page > 1) return newHomePageResponse(sectionName, emptyList())
-        
-        val document = getDocument(playerUrl)
-        
-        // Check for CGU redirect
-        if (document.location().contains("/cgu/")) {
-            // Try direct access with minimal headers
-            val altDoc = app.get(playerUrl, headers = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            )).document
-            return processHomePage(altDoc, sectionName)
-        }
-        
-        return processHomePage(document, sectionName)
-    }
-
-    private fun processHomePage(document: Element, sectionName: String): HomePageResponse {
-        val items = mutableListOf<HomePageList>()
-        val allItems = mutableListOf<SearchResponse>()
-        
-        // Extract video items using multiple selectors
-        val selectors = listOf(
-            ".swiper-slide",
-            ".video-item",
-            ".item.video",
-            ".video-card",
-            "a[href*='/player/']"
-        )
-        
-        selectors.forEach { selector ->
-            val foundItems = document.select(selector).mapNotNull { it.toSearchResponse() }
-            if (foundItems.isNotEmpty() && selector == ".swiper-slide") {
-                items.add(HomePageList("🎬 Videos", foundItems))
-            }
-            allItems.addAll(foundItems)
-        }
-        
-        return if (items.isNotEmpty()) {
-            newHomePageResponse(items)
-        } else {
-            newHomePageResponse(sectionName, allItems.distinctBy { it.url })
-        }
-    }
-
-    private suspend fun getAllCategoriesPage(): HomePageResponse {
-        val document = getDocument(categoriesUrl, playerUrl)
-        val items = mutableListOf<SearchResponse>()
-        
-        // Extract category links
-        items.addAll(document.select("a[href*='/categorie/']").mapNotNull { link ->
-            val href = link.attr("href")
-            if (href.isBlank()) return@mapNotNull null
-            
-            val fullUrl = fixUrl(href)
-            val title = link.text().trim()
-            if (title.isBlank()) return@mapNotNull null
-            
-            newMovieSearchResponse(title, fullUrl, TvType.AnimeMovie) {
-                this.posterUrl = link.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
-            }
-        })
-        
-        // Also extract video items from the categories page
-        items.addAll(extractItemsFromDocument(document, categoriesUrl))
-        
-        return newHomePageResponse("📁 All Categories", items.distinctBy { it.url })
-    }
-
     private fun extractItemsFromDocument(document: Element, baseUrl: String): List<SearchResponse> {
         val items = mutableListOf<SearchResponse>()
         
-        // Extract from swiper slides (main method)
-        items.addAll(document.select(".swiper-slide").mapNotNull { it.toSearchResponse() })
+        // Method 1: Swiper slides
+        items.addAll(document.select(".swiper-slide").mapNotNull { slide ->
+            slide.toSearchResponse()
+        })
         
-        // Extract from video items
-        items.addAll(document.select(".video-item, .item.video").mapNotNull { it.toSearchResponse() })
+        // Method 2: Video items
+        items.addAll(document.select(".video-item, .item.video, .video-card").mapNotNull { item ->
+            item.toSearchResponse()
+        })
         
-        // Extract from direct links
+        // Method 3: Direct links
         items.addAll(document.select("a[href*='/player/']").filterNot { 
-            it.attr("href").contains("categories") || it.attr("href").contains("cgu")
+            val href = it.attr("href")
+            href.contains("categories") || href.contains("cgu") || href.contains("highlights")
         }.mapNotNull { link ->
             val href = link.attr("href")
             if (href.isBlank()) return@mapNotNull null
@@ -212,7 +140,7 @@ class Catsuka : MainAPI() {
             val fullUrl = fixUrl(href)
             val title = link.attr("title")
                 ?: link.selectFirst("img")?.attr("alt")
-                ?: link.selectFirst(".title, .name, span")?.text()
+                ?: link.selectFirst(".title, .name, h3, h4, span")?.text()
                 ?: link.text().trim()
             
             if (title.isBlank() || title.contains("CGU", ignoreCase = true)) return@mapNotNull null
@@ -295,31 +223,11 @@ class Catsuka : MainAPI() {
         val poster = document.selectFirst("meta[property='og:image']")?.attr("content")?.let { fixUrl(it) }
             ?: document.selectFirst(".video-poster img")?.attr("src")?.let { fixUrl(it) }
             ?: document.selectFirst("img[src*='thumbnail']")?.attr("src")?.let { fixUrl(it) }
+            ?: document.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
         
-        // Check for series
-        val episodeLinks = document.select("a[href*='/player/'][href*='/episode'], a.episode-link")
-        val episodes = episodeLinks.mapIndexed { index, link ->
-            val episodeUrl = fixUrl(link.attr("href"))
-            val episodeTitle = link.selectFirst(".episode-title, .title")?.text()?.trim()
-                ?: "Episode ${index + 1}"
-            
-            newEpisode(episodeUrl) {
-                this.name = episodeTitle
-                this.episode = index + 1
-                this.season = 1
-            }
-        }
-        
-        return if (episodes.isNotEmpty()) {
-            newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
-                this.posterUrl = poster
-                this.plot = description
-            }
-        } else {
-            newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
-                this.posterUrl = poster
-                this.plot = description
-            }
+        return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
+            this.posterUrl = poster
+            this.plot = description
         }
     }
 
