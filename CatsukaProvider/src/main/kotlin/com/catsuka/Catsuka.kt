@@ -15,219 +15,249 @@ class Catsuka : MainAPI() {
         TvType.Anime,
         TvType.OVA
     )
-    
-    private val playerUrl = "$mainUrl/player"
-    private val categoriesUrl = "$mainUrl/player/categories/"
 
-    override val mainPage = mainPageOf(
-        playerUrl to "📺 Catsuka Home",
-        categoriesUrl to "📁 All Categories",
-        "$mainUrl/player/highlights/" to "⭐ Animator Highlights",
-        "$mainUrl/player/updates/" to "🆕 Latest Updates",
-        "$mainUrl/player/binge/" to "🍿 Binge! Anime Series",
-        "$playerUrl/?recherche=&sort=views" to "🔥 Most Viewed",
-        "$mainUrl/player/categorie/courtmetrage" to "🎬 Short Films",
-        "$mainUrl/player/categorie/pilote" to "✈️ Pilots",
-        "$mainUrl/player/categorie/episode" to "📺 Episodes",
-        "$mainUrl/player/categorie/clip" to "🎵 Music Videos",
-        "$mainUrl/player/categorie/pub" to "📢 Commercials",
-        "$mainUrl/player/categorie/cinematique" to "🎮 Cinematics",
-        "$mainUrl/player/categorie/opening" to "🎭 Openings",
-        "$mainUrl/player/categorie/trailer" to "🎥 Trailers",
-        "$mainUrl/player/categorie/extrait" to "📖 Excerpts",
-        "$mainUrl/player/categorie/demoreel" to "🎨 Demoreels",
-        "$mainUrl/player/categorie/sakuga" to "🇯🇵 Sakuga",
-        "$mainUrl/player/categorie/makingof" to "🔧 Making Of",
-        "$mainUrl/player/categorie/parodies" to "❤️ Tributes",
-        "$mainUrl/player/categorie/autres" to "📦 Others",
-        "$mainUrl/player/categorie/nanars" to "😂 Junk",
-        "$mainUrl/player/categorie/catsukanolife" to "📡 Catsuka TV Show",
-        "$mainUrl/player/categorie/catsukatrailers" to "🎞️ Movie Trailers"
-    )
-
-    // Browser headers to avoid CGU page
-    private fun getBrowserHeaders(referer: String = ""): Map<String, String> {
-        val headers = mutableMapOf(
+    // Add proper headers to avoid blocking
+    override fun getHeaders(): Map<String, String> {
+        return mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language" to "en-US,en;q=0.9,fr;q=0.8",
+            "Accept-Language" to "en-US,en;q=0.5",
             "Accept-Encoding" to "gzip, deflate, br",
             "Connection" to "keep-alive",
             "Upgrade-Insecure-Requests" to "1",
-            "Sec-Fetch-Dest" to "document",
-            "Sec-Fetch-Mode" to "navigate",
-            "Sec-Fetch-Site" to "same-origin",
             "Cache-Control" to "max-age=0"
         )
-        
-        if (referer.isNotEmpty()) {
-            headers["Referer"] = referer
-        }
-        
-        return headers
     }
-
-    // Helper function to fetch pages with proper headers
-    private suspend fun getDocument(url: String, referer: String = playerUrl): Element {
-        return app.get(url, headers = getBrowserHeaders(referer)).document
-    }
+    
+    private val playerUrl = "$mainUrl/player"
+    
+    // Simplified main page - only working categories
+    override val mainPage = mainPageOf(
+        "$playerUrl/?recherche=&sort=views" to "🔥 Most Viewed",
+        "$playerUrl/?recherche=&sort=newest" to "🆕 Newest",
+        "$playerUrl/categorie/episode" to "📺 Episodes",
+        "$playerUrl/categorie/courtmetrage" to "🎬 Short Films",
+        "$playerUrl/categorie/trailer" to "🎥 Trailers",
+        "$playerUrl/categorie/clip" to "🎵 Music Videos",
+        "$playerUrl/categorie/opening" to "🎭 Openings",
+        "$playerUrl/categorie/pub" to "📢 Commercials"
+    )
 
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
         val url = request.data
+        val pageNum = if (page > 1) page else 1
         
         return try {
-            val pageUrl = if (page > 1) "$url?page=$page" else url
-            val document = getDocument(pageUrl, playerUrl)
-            
-            // Check if we got CGU page
-            val pageText = document.text()
-            if (pageText.contains("General conditions of use") || 
-                pageText.contains("Conditions d'utilisation") ||
-                document.select("h1, h2").any { 
-                    it.text().contains("CGU", ignoreCase = true) || 
-                    it.text().contains("Conditions", ignoreCase = true) 
-                }) {
-                
-                // Try alternative approach with minimal headers
-                val altDoc = app.get(pageUrl, headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                )).document
-                
-                val items = extractItemsFromDocument(altDoc, url)
-                return newHomePageResponse(
-                    request.name,
-                    items.distinctBy { it.url },
-                    hasNext = items.isNotEmpty() && url != playerUrl
-                )
+            // Construct the correct URL with pagination
+            val actualUrl = if (pageNum > 1) {
+                if (url.contains("?")) "$url&page=$pageNum" else "$url?page=$pageNum"
+            } else {
+                url
             }
             
-            val items = extractItemsFromDocument(document, url)
+            val document = app.get(actualUrl, headers = getHeaders()).document
+            
+            // Debug: Print page structure
+            println("=== CATSUKA DEBUG ===")
+            println("URL: $actualUrl")
+            println("Title: ${document.title()}")
+            println("Body length: ${document.body().text().length}")
+            
+            // Try multiple selectors to find videos
+            val items = extractVideosFromDocument(document)
+            
+            println("Found ${items.size} items")
+            println("=== END DEBUG ===")
+            
             newHomePageResponse(
                 request.name,
-                items.distinctBy { it.url },
-                hasNext = items.isNotEmpty() && url != playerUrl
+                items,
+                hasNext = items.isNotEmpty()
             )
-            
         } catch (e: Exception) {
+            e.printStackTrace()
             newHomePageResponse(request.name, emptyList())
         }
     }
 
-    private fun extractItemsFromDocument(document: Element, baseUrl: String): List<SearchResponse> {
+    private fun extractVideosFromDocument(document: Element): List<SearchResponse> {
         val items = mutableListOf<SearchResponse>()
         
-        // Method 1: Swiper slides
-        items.addAll(document.select(".swiper-slide").mapNotNull { slide ->
-            slide.toSearchResponse()
-        })
+        // METHOD 1: Look for video cards with proper structure
+        document.select("article, .item, .video-card, .media-item, .swiper-slide").forEach { element ->
+            val result = extractVideoFromElement(element)
+            result?.let { items.add(it) }
+        }
         
-        // Method 2: Video items
-        items.addAll(document.select(".video-item, .item.video, .video-card").mapNotNull { item ->
-            item.toSearchResponse()
-        })
-        
-        // Method 3: Direct links
-        items.addAll(document.select("a[href*='/player/']").filterNot { 
-            val href = it.attr("href")
-            href.contains("categories") || href.contains("cgu") || href.contains("highlights")
-        }.mapNotNull { link ->
-            val href = link.attr("href")
-            if (href.isBlank()) return@mapNotNull null
-            
-            val fullUrl = fixUrl(href)
-            val title = link.attr("title")
-                ?: link.selectFirst("img")?.attr("alt")
-                ?: link.selectFirst(".title, .name, h3, h4, span")?.text()
-                ?: link.text().trim()
-            
-            if (title.isBlank() || title.contains("CGU", ignoreCase = true)) return@mapNotNull null
-            
-            val poster = link.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
-                ?: link.selectFirst("img")?.attr("data-src")?.let { fixUrl(it) }
-            
-            newMovieSearchResponse(title, fullUrl, TvType.AnimeMovie) {
-                this.posterUrl = poster
+        // METHOD 2: Look for direct video links if METHOD 1 fails
+        if (items.isEmpty()) {
+            document.select("a[href*='/player/']").forEach { link ->
+                val href = link.attr("href")
+                if (href.isNotBlank() && !href.contains("categories") && !href.contains("?")) {
+                    val title = link.attr("title")
+                        ?: link.selectFirst("img")?.attr("alt")
+                        ?: link.text().trim()
+                    
+                    if (title.isNotBlank() && !title.contains("category", ignoreCase = true)) {
+                        items.add(
+                            newMovieSearchResponse(title, fixUrl(href), TvType.AnimeMovie) {
+                                this.posterUrl = link.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
+                            }
+                        )
+                    }
+                }
             }
-        })
+        }
         
-        return items.distinctBy { it.url }
+        // METHOD 3: Look for grid items
+        if (items.isEmpty()) {
+            document.select(".grid-item, .col, .thumbnail").forEach { element ->
+                val link = element.selectFirst("a[href*='/player/']")
+                link?.let {
+                    val href = it.attr("href")
+                    val title = element.selectFirst(".title, h3, .name")?.text()?.trim()
+                        ?: it.attr("title")
+                        ?: it.selectFirst("img")?.attr("alt")
+                        ?: it.text().trim()
+                    
+                    if (title.isNotBlank()) {
+                        items.add(
+                            newMovieSearchResponse(title, fixUrl(href), TvType.AnimeMovie) {
+                                this.posterUrl = it.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        
+        // Remove duplicates and limit
+        return items.distinctBy { it.url }.take(50)
     }
 
-    private fun Element.toSearchResponse(): SearchResponse? {
-        // Find video link
-        val link = this.selectFirst("a[href*='/player/']") ?: return null
+    private fun extractVideoFromElement(element: Element): SearchResponse? {
+        // Find the video link
+        val link = element.selectFirst("a[href*='/player/']") ?: return null
         val href = link.attr("href")
         
-        if (href.isBlank() || href.contains("categories") || href.contains("cgu")) {
+        // Skip non-video links
+        if (href.isBlank() || 
+            href.contains("categories") || 
+            href.contains("?page=") || 
+            href.contains("?recherche=")) {
             return null
         }
         
-        val fullUrl = fixUrl(href)
-        
         // Extract title
-        val title = this.selectFirst(".video-title, .title, h3, h4, .name")?.text()?.trim()
+        val title = element.selectFirst(".title, h3, .name, .video-title, .caption")?.text()?.trim()
             ?: link.attr("title")
             ?: link.selectFirst("img")?.attr("alt")
+            ?: element.selectFirst("img")?.attr("alt")
             ?: link.text().trim()
         
-        if (title.isBlank() || title.contains("CGU", ignoreCase = true)) {
+        if (title.isBlank() || title == "Lire" || title == "Voir") {
             return null
         }
         
         // Extract thumbnail
-        val poster = this.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
-            ?: this.selectFirst("img")?.attr("data-src")?.let { fixUrl(it) }
+        val poster = element.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
+            ?: element.selectFirst("img")?.attr("data-src")?.let { fixUrl(it) }
             ?: link.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
             ?: link.selectFirst("img")?.attr("data-src")?.let { fixUrl(it) }
+        
+        // Extract duration if available
+        val durationText = element.selectFirst(".duration, .time, .video-duration")?.text()?.trim()
+        val duration = parseDuration(durationText)
+        
+        // Extract year from title if present
+        val year = Regex("(\\d{4})").find(title)?.groupValues?.get(1)?.toIntOrNull()
         
         // Determine type
         val tvType = when {
             title.contains("Movie", ignoreCase = true) || href.contains("/movie/") -> TvType.AnimeMovie
-            title.contains("Season", ignoreCase = true) || href.contains("/videos/") -> TvType.Anime
+            title.contains("Episode", ignoreCase = true) || href.contains("/episode/") -> TvType.Anime
             else -> TvType.OVA
         }
         
-        return newMovieSearchResponse(title, fullUrl, tvType) {
+        return newMovieSearchResponse(title, fixUrl(href), tvType) {
             this.posterUrl = poster
+            if (duration > 0) this.duration = duration
+            this.year = year
+        }
+    }
+
+    private fun parseDuration(text: String?): Int {
+        if (text.isNullOrBlank()) return 0
+        
+        return try {
+            when {
+                text.contains(":")) -> {
+                    val parts = text.split(":")
+                    when (parts.size) {
+                        2 -> parts[0].toInt() * 60 + parts[1].toInt()  // MM:SS
+                        3 -> parts[0].toInt() * 3600 + parts[1].toInt() * 60 + parts[2].toInt()  // HH:MM:SS
+                        else -> 0
+                    }
+                }
+                text.contains("min")) -> {
+                    Regex("(\\d+)").find(text)?.groupValues?.get(1)?.toInt()?.times(60) ?: 0
+                }
+                else -> text.toIntOrNull() ?: 0
+            }
+        } catch (e: Exception) {
+            0
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
         
-        val searchUrl = "$playerUrl/?recherche=${URLEncoder.encode(query, "UTF-8")}"
-        val document = getDocument(searchUrl, playerUrl)
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        val searchUrl = "$playerUrl/?recherche=$encodedQuery"
         
-        return extractItemsFromDocument(document, searchUrl).filter { 
-            it.name.contains(query, ignoreCase = true)
+        try {
+            val document = app.get(searchUrl, headers = getHeaders()).document
+            return extractVideosFromDocument(document)
+                .filter { it.name.contains(query, ignoreCase = true) }
+                .take(20)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return emptyList()
         }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = getDocument(url, playerUrl)
-        
-        // Extract metadata
-        val title = document.selectFirst("meta[property='og:title']")?.attr("content")
-            ?: document.selectFirst("h1")?.text()?.trim()
-            ?: document.selectFirst(".video-title")?.text()?.trim()
-            ?: "Catsuka Video"
-        
-        val description = document.selectFirst("meta[property='og:description']")?.attr("content")
-            ?: document.selectFirst("meta[name=description]")?.attr("content")
-            ?: document.selectFirst(".video-description, .description")?.text()?.trim()
-            ?: "Animation video from Catsuka Player"
-        
-        val poster = document.selectFirst("meta[property='og:image']")?.attr("content")?.let { fixUrl(it) }
-            ?: document.selectFirst(".video-poster img")?.attr("src")?.let { fixUrl(it) }
-            ?: document.selectFirst("img[src*='thumbnail']")?.attr("src")?.let { fixUrl(it) }
-            ?: document.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
-        
-        return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
-            this.posterUrl = poster
-            this.plot = description
+        try {
+            val document = app.get(url, headers = getHeaders()).document
+            
+            // Extract metadata
+            val title = document.selectFirst("meta[property='og:title']")?.attr("content")
+                ?: document.selectFirst("h1")?.text()?.trim()
+                ?: document.selectFirst(".video-title")?.text()?.trim()
+                ?: "Catsuka Video"
+            
+            val description = document.selectFirst("meta[property='og:description']")?.attr("content")
+                ?: document.selectFirst("meta[name=description]")?.attr("content")
+                ?: document.selectFirst(".description, .video-description")?.text()?.trim()
+                ?: "Animation video from Catsuka"
+            
+            val poster = document.selectFirst("meta[property='og:image']")?.attr("content")?.let { fixUrl(it) }
+                ?: document.selectFirst(".video-poster img")?.attr("src")?.let { fixUrl(it) }
+                ?: document.selectFirst("img[src*='thumbnail']")?.attr("src")?.let { fixUrl(it) }
+            
+            val year = Regex("(\\d{4})").find(title)?.groupValues?.get(1)?.toIntOrNull()
+            
+            return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
+                this.posterUrl = poster
+                this.plot = description
+                this.year = year
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return newMovieLoadResponse("Catsuka Video", url, TvType.AnimeMovie, url)
         }
     }
 
@@ -237,17 +267,14 @@ class Catsuka : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = getDocument(data, playerUrl)
-        var foundLinks = false
-        
-        // Direct video sources
-        document.select("video source[src], video[src], [data-video-src]").forEach { source ->
-            val videoUrl = source.attr("src")
-                .ifBlank { source.attr("data-src") }
-                .ifBlank { source.attr("data-video-src") }
+        try {
+            val document = app.get(data, headers = getHeaders()).document
             
-            if (videoUrl.isNotBlank()) {
-                foundLinks = true
+            // METHOD 1: Direct video source
+            val videoSource = document.selectFirst("video source[src], video[src]")
+            val videoUrl = videoSource?.attr("src")
+            
+            if (videoUrl != null && videoUrl.isNotBlank()) {
                 callback(
                     ExtractorLink(
                         source = name,
@@ -259,21 +286,42 @@ class Catsuka : MainAPI() {
                                else ExtractorLinkType.VIDEO
                     )
                 )
+                return true
             }
+            
+            // METHOD 2: Embedded iframe
+            val iframe = document.selectFirst("iframe[src*='player'], iframe[src*='video']")
+            val iframeSrc = iframe?.attr("src")
+            
+            if (iframeSrc != null && iframeSrc.isNotBlank()) {
+                loadExtractor(fixUrl(iframeSrc), data, subtitleCallback, callback)
+                return true
+            }
+            
+            // METHOD 3: Data attributes
+            val dataVideo = document.selectFirst("[data-video-src], [data-src*='.mp4']")
+            val dataVideoUrl = dataVideo?.attr("data-video-src") ?: dataVideo?.attr("data-src")
+            
+            if (dataVideoUrl != null && dataVideoUrl.isNotBlank()) {
+                callback(
+                    ExtractorLink(
+                        source = name,
+                        name = "Data Video",
+                        url = fixUrl(dataVideoUrl),
+                        referer = data,
+                        quality = Qualities.Unknown.value,
+                        type = if (dataVideoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 
+                               else ExtractorLinkType.VIDEO
+                    )
+                )
+                return true
+            }
+            
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
         
-        // If no direct links, check for embedded players
-        if (!foundLinks) {
-            document.select("iframe[src*='youtube'], iframe[src*='vimeo']").forEach { iframe ->
-                val iframeSrc = iframe.attr("src")
-                if (iframeSrc.isNotBlank()) {
-                    foundLinks = true
-                    loadExtractor(fixUrl(iframeSrc), data, subtitleCallback, callback)
-                }
-            }
-        }
-        
-        return foundLinks
+        return false
     }
 
     private fun fixUrl(url: String): String {
