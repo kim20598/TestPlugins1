@@ -129,7 +129,7 @@ class Animezid : MainAPI() {
         }
     }
 
-    // ==================== LOAD LINKS - COMPLETE WORKING VERSION ====================
+    // ==================== LOAD LINKS - SIMPLIFIED AND FIXED VERSION ====================
 
     override suspend fun loadLinks(
         data: String,
@@ -140,66 +140,95 @@ class Animezid : MainAPI() {
         val document = app.get(data).document
         var foundLinks = false
 
-        // METHOD 1: Extract from server buttons with data-embed (Primary method)
-        document.select("#xservers button[data-embed], .xservers button[data-embed], button[data-embed]").forEach { serverButton ->
+        // METHOD 1: Extract from server buttons with data-embed (THE CORRECT WAY)
+        document.select("#xservers button[data-embed]").forEach { serverButton ->
             val embedUrl = serverButton.attr("data-embed").trim()
             val serverName = serverButton.text().trim().ifBlank { "Server" }
             
             if (embedUrl.isNotBlank()) {
                 foundLinks = true
+                // Log for debugging
+                println("Found server: $serverName - $embedUrl")
                 loadExtractor(embedUrl, data, subtitleCallback, callback)
             }
         }
 
-        // METHOD 2: Try to get iframe directly from onclick attributes (Common pattern on this site)
+        // METHOD 2: Get the currently loaded iframe in Playerholder (active server)
         if (!foundLinks) {
-            document.select("button[onclick*='iframe'], li[onclick*='iframe'], a[onclick*='iframe']").forEach { element ->
-                val onclick = element.attr("onclick")
-                // Extract URL from onclick like: loadVideo('https://example.com/embed/xxx')
-                val urlPatterns = listOf(
-                    Regex("loadVideo\\(['\"]([^'\"]+)['\"]\\)"),
-                    Regex("changeVideo\\(['\"]([^'\"]+)['\"]\\)"),
-                    Regex("['\"](https?://[^'\"]+)['\"]"),
-                    Regex("src=['\"]([^'\"]+)['\"]")
-                )
+            document.selectFirst("#Playerholder iframe[src]")?.let { iframe ->
+                val iframeSrc = iframe.attr("src").trim()
+                if (iframeSrc.isNotBlank() && iframeSrc != "about:blank") {
+                    foundLinks = true
+                    println("Found iframe: $iframeSrc")
+                    loadExtractor(iframeSrc, data, subtitleCallback, callback)
+                }
+            }
+        }
+
+        // METHOD 3: Extract download links (these are file hosting sites)
+        document.select("a.dl.show_dl.api[href]").forEach { downloadLink ->
+            val downloadUrl = downloadLink.attr("href").trim()
+            val quality = downloadLink.select("span").firstOrNull()?.text() ?: "Unknown"
+            val host = downloadLink.select("span").getOrNull(1)?.text() ?: "Download"
+            
+            if (downloadUrl.isNotBlank() && downloadUrl.startsWith("http")) {
+                foundLinks = true
+                println("Found download link: $quality - $host - $downloadUrl")
                 
-                for (pattern in urlPatterns) {
-                    val match = pattern.find(onclick)
-                    if (match != null) {
-                        val extractedUrl = match.groupValues[1]
-                        if (extractedUrl.isNotBlank()) {
-                            foundLinks = true
-                            loadExtractor(extractedUrl, data, subtitleCallback, callback)
+                // For file hosting sites, try to load them with extractors
+                when {
+                    downloadUrl.contains("koramaup.com") ||
+                    downloadUrl.contains("bowfile.com") ||
+                    downloadUrl.contains("file-upload.org") ||
+                    downloadUrl.contains("1fichier.com") ||
+                    downloadUrl.contains("1cloudfile.com") ||
+                    downloadUrl.contains("frdl.io") ||
+                    downloadUrl.contains("lbx.to") -> {
+                        loadExtractor(downloadUrl, data, subtitleCallback, callback)
+                    }
+                    else -> {
+                        // For other download links, try as direct links
+                        try {
+                            callback(
+                                newExtractorLink(
+                                    source = name,
+                                    name = "$quality - $host",
+                                    url = fixUrl(downloadUrl),
+                                    type = ExtractorLinkType.DIRECT
+                                ) {
+                                    this.referer = data
+                                    this.quality = when {
+                                        quality.contains("1080") -> Qualities.FullHDP.value
+                                        quality.contains("720") -> Qualities.HDP.value
+                                        quality.contains("480") -> Qualities.SDVD.value
+                                        quality.contains("360") -> Qualities.SD.value
+                                        else -> Qualities.Unknown.value
+                                    }
+                                }
+                            )
+                        } catch (e: Exception) {
+                            // If direct link fails, try extractor
+                            loadExtractor(downloadUrl, data, subtitleCallback, callback)
                         }
                     }
                 }
             }
         }
 
-        // METHOD 3: Get the currently loaded iframe in Playerholder
+        // METHOD 4: Fallback - try the embed.php URL from meta tags
         if (!foundLinks) {
-            document.selectFirst("#Playerholder iframe, .player-iframe iframe, iframe[src]")?.let { iframe ->
-                val iframeSrc = iframe.attr("src").trim()
-                if (iframeSrc.isNotBlank() && iframeSrc != "about:blank") {
-                    foundLinks = true
-                    loadExtractor(iframeSrc, data, subtitleCallback, callback)
-                }
-            }
-        }
-
-        // METHOD 4: Try to load embed.php from meta tags
-        if (!foundLinks) {
-            document.selectFirst("meta[itemprop=embedURL], meta[property='og:video:url']")?.attr("content")?.let { embedUrl ->
+            document.selectFirst("meta[itemprop=embedURL]")?.attr("content")?.let { embedUrl ->
                 if (embedUrl.isNotBlank() && embedUrl.contains("embed.php")) {
-                    // Try to load the embed page
+                    foundLinks = true
+                    println("Found embed URL: $embedUrl")
+                    // Try to extract from embed page
                     try {
                         val embedDoc = app.get(embedUrl).document
                         
-                        // Look for video sources or iframes in the embed page
+                        // Look for iframes in the embed page
                         embedDoc.select("iframe[src]").forEach { iframe ->
                             val iframeSrc = iframe.attr("src")
                             if (iframeSrc.isNotBlank()) {
-                                foundLinks = true
                                 loadExtractor(fixUrl(iframeSrc), embedUrl, subtitleCallback, callback)
                             }
                         }
@@ -208,7 +237,6 @@ class Animezid : MainAPI() {
                         embedDoc.select("video source[src], source[type^='video/'][src]").forEach { source ->
                             val videoUrl = source.attr("src")
                             if (videoUrl.isNotBlank()) {
-                                foundLinks = true
                                 callback(
                                     newExtractorLink(
                                         source = name,
@@ -223,28 +251,20 @@ class Animezid : MainAPI() {
                             }
                         }
                     } catch (e: Exception) {
-                        // Ignore errors and try next method
+                        // If embed page fails, try the embed URL itself
+                        loadExtractor(embedUrl, data, subtitleCallback, callback)
                     }
                 }
             }
         }
 
-        // METHOD 5: Extract download links (these are file hosting sites)
-        document.select("a.dl.show_dl.api[href], a[href*='download'], .download-link[href]").forEach { downloadLink ->
-            val downloadUrl = downloadLink.attr("href").trim()
-            if (downloadUrl.isNotBlank() && downloadUrl.startsWith("http")) {
-                foundLinks = true
-                // Try to extract from file hosting sites
-                loadExtractor(downloadUrl, data, subtitleCallback, callback)
-            }
-        }
-
-        // METHOD 6: Check for video sources in the page itself
+        // METHOD 5: Check for direct video sources on the page
         if (!foundLinks) {
             document.select("video source[src], source[type^='video/'][src]").forEach { source ->
                 val videoUrl = source.attr("src").trim()
                 if (videoUrl.isNotBlank()) {
                     foundLinks = true
+                    println("Found direct video source: $videoUrl")
                     callback(
                         newExtractorLink(
                             source = name,
@@ -256,41 +276,6 @@ class Animezid : MainAPI() {
                             this.quality = Qualities.Unknown.value
                         }
                     )
-                }
-            }
-        }
-
-        // METHOD 7: Try to extract from script tags that contain video URLs
-        if (!foundLinks) {
-            document.select("script:containsData(http)").forEach { script ->
-                val scriptContent = script.data()
-                // Look for common video URL patterns in scripts
-                val patterns = listOf(
-                    Regex("""["'](https?://[^"']+\.(mp4|m3u8|mkv|avi|mov|wmv|flv)[^"']*)["']"""),
-                    Regex("""src:\s*["'](https?://[^"']+)["']"""),
-                    Regex("""file:\s*["'](https?://[^"']+)["']"""),
-                    Regex("""url:\s*["'](https?://[^"']+)["']""")
-                )
-                
-                for (pattern in patterns) {
-                    val matches = pattern.findAll(scriptContent)
-                    for (match in matches) {
-                        val videoUrl = match.groupValues[1]
-                        if (videoUrl.isNotBlank() && !videoUrl.contains("google") && !videoUrl.contains("facebook")) {
-                            foundLinks = true
-                            callback(
-                                newExtractorLink(
-                                    source = name,
-                                    name = name,
-                                    url = fixUrl(videoUrl),
-                                    type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = data
-                                    this.quality = Qualities.Unknown.value
-                                }
-                            )
-                        }
-                    }
                 }
             }
         }
