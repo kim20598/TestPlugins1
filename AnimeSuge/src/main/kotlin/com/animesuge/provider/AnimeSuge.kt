@@ -11,7 +11,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import org.jsoup.nodes.Element
 
-class AnimeSugeProvider : MainAPI() {
+class AnimeSuge : MainAPI() {
     override var mainUrl = "https://animesuge.bz"
     override var name = "Animesuge"
     override val hasMainPage = true
