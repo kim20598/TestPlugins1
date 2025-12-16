@@ -52,36 +52,27 @@ class Animezid : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
         
-        // Extract title - clean up welcome messages
-        val rawTitle = document.selectFirst("h1")?.text()
+        // Extract title from multiple possible locations
+        val title = document.selectFirst("meta[itemprop=name]")?.attr("content")
+            ?: document.selectFirst("h1 span strong")?.text()
             ?: document.selectFirst("h1.post__name")?.text()
-            ?: document.selectFirst(".video-title")?.text()
-            ?: document.selectFirst(".post__title")?.text()
+            ?: document.selectFirst("h1")?.text()
             ?: "Unknown"
 
-        // Clean the title - remove welcome messages and site names
-        val cleanTitle = cleanTitleText(rawTitle)
-            
-        // Extract poster
+        // Extract poster from meta tags or images
         val poster = document.selectFirst("meta[itemprop=image]")?.attr("content")
             ?: document.selectFirst("meta[itemprop=thumbnailUrl]")?.attr("content")
             ?: document.selectFirst("img.lazy")?.attr("data-src")
-            ?: document.selectFirst(".post__image img")?.attr("src")
             ?: ""
             
         // Extract description
         val description = document.selectFirst(".pm-video-description p.description")?.text()?.trim()
             ?: document.selectFirst("meta[name=description]")?.attr("content")?.trim()
-            ?: document.selectFirst(".post__description")?.text()?.trim()
             ?: ""
-        
-        val cleanDescription = cleanDescriptionText(description)
             
         // Check for episodes (seasons and episodes tabs)
-        val episodes = mutableListOf<Episode>()
-        
-        // METHOD 1: Check for seasons and episodes in the proper structure
         val hasSeasons = document.select(".tab-seasons li[data-serie]").isNotEmpty()
+        val episodes = mutableListOf<Episode>()
         
         if (hasSeasons) {
             // This is a series with seasons
@@ -104,105 +95,41 @@ class Animezid : MainAPI() {
                 }
             }
         } else {
-            // METHOD 2: Check for episodes without seasons (direct episodes list)
-            document.select(".tab-episodes .SeasonsEpisodes a[href*='watch.php']").forEach { episodeLink ->
-                val episodeUrl = fixUrl(episodeLink.attr("href"))
-                val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
-                val episodeTitle = episodeLink.select("span").text()
-                    .ifBlank { "الحلقة $episodeNum" }
-                
-                episodes.add(
-                    newEpisode(episodeUrl) {
-                        this.name = episodeTitle
-                        this.episode = episodeNum
-                        this.season = 1
-                    }
-                )
-            }
-            
-            // METHOD 3: Check for any watch.php links that might be episodes
-            if (episodes.isEmpty()) {
-                document.select("a[href*='watch.php?vid=']").forEach { episodeLink ->
-                    // Skip if it's the current video or not in an episodes section
-                    if (!episodeLink.attr("href").contains(url.substringAfterLast("vid=")) &&
-                        (episodeLink.parents().select(".SeasonsEpisodes, .tab-episodes, .pm-video-watch-episodes").isNotEmpty() ||
-                         episodeLink.text().contains("الحلقة") || 
-                         episodeLink.select("em").isNotEmpty())) {
-                        
-                        val episodeUrl = fixUrl(episodeLink.attr("href"))
-                        val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
-                        val episodeTitle = episodeLink.text().trim()
-                            .ifBlank { "الحلقة ${episodeLink.select("em").text()}" }
-                            .ifBlank { "الحلقة $episodeNum" }
-                        
-                        episodes.add(
-                            newEpisode(episodeUrl) {
-                                this.name = episodeTitle
-                                this.episode = episodeNum
-                                this.season = 1
-                            }
-                        )
-                    }
+            // Check for direct episode links without seasons
+            document.select("a[href*='watch.php?vid=']").forEach { episodeLink ->
+                if (episodeLink.parents().select(".SeasonsEpisodes, .tab-episodes").isNotEmpty()) {
+                    val episodeUrl = fixUrl(episodeLink.attr("href"))
+                    val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
+                    val episodeTitle = episodeLink.select("span").text()
+                        .ifBlank { "الحلقة $episodeNum" }
+                    
+                    episodes.add(
+                        newEpisode(episodeUrl) {
+                            this.name = episodeTitle
+                            this.episode = episodeNum
+                            this.season = 1
+                        }
+                    )
                 }
             }
         }
         
-        // Better detection for movie vs series - FIXED FOR MOVIES
-        val isSeries = when {
-            // If we found episodes, it's a series
-            episodes.isNotEmpty() -> true
-            // If there are seasons tabs, it's a series
-            document.select(".tab-seasons").isNotEmpty() -> true
-            // If there are episodes tabs, it's a series
-            document.select(".tab-episodes").isNotEmpty() -> true
-            // If title contains series indicators
-            rawTitle.contains("مسلسل") || 
-            rawTitle.contains("الموسم") || 
-            rawTitle.contains("الحلقة") ||
-            rawTitle.contains("الموسم") ||
-            rawTitle.contains("الحلقة") -> true
-            // If URL indicates series
-            url.contains("/category.php?cat=series") ||
-            url.contains("/category.php?cat=anime") -> true
-            // If URL indicates a movie category - treat as movie
-            url.contains("/category.php?cat=movies") ||
-            url.contains("/movie/") -> false
-            // Default - check for single episode (like in your screenshot)
-            else -> {
-                // If there's only one download link or it looks like a movie page
-                val hasDownloadLinks = document.select("a.dl.show_dl.api[href]").isNotEmpty()
-                val hasSingleEpisode = document.select("a[href*='watch.php']").size == 1
-                
-                // If it has download links but no episode structure, it's likely a movie
-                hasDownloadLinks && !hasSingleEpisode
-            }
-        }
-        
-        // For movies, we need to pass the correct URL to loadLinks
-        val loadData = if (isSeries && episodes.isNotEmpty()) {
-            // For series, use the first episode URL for testing
-            episodes.firstOrNull()?.data ?: url
-        } else {
-            // For movies, use the current page URL
-            url
-        }
-        
-        return if (isSeries) {
+        return if (episodes.isNotEmpty()) {
             // TV Series
-            newTvSeriesLoadResponse(cleanTitle, url, TvType.Anime, episodes.distinctBy { "${it.season}_${it.episode}" }) {
+            newTvSeriesLoadResponse(title, url, TvType.Anime, episodes.distinctBy { "${it.season}_${it.episode}" }) {
                 this.posterUrl = fixUrl(poster)
-                this.plot = cleanDescription
+                this.plot = description
             }
         } else {
             // Movie
-            newMovieLoadResponse(cleanTitle, url, TvType.Movie, loadData) {
+            newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = fixUrl(poster)
-                this.plot = cleanDescription
+                this.plot = description
             }
         }
     }
 
-    // ==================== LOAD LINKS - KEEP ORIGINAL WORKING VERSION ====================
+    // ==================== LOAD LINKS - FIXED VERSION ====================
 
     override suspend fun loadLinks(
         data: String,
@@ -245,7 +172,21 @@ class Animezid : MainAPI() {
                 foundLinks = true
                 
                 // For file hosting sites, try to load them with extractors
-                loadExtractor(downloadUrl, data, subtitleCallback, callback)
+                when {
+                    downloadUrl.contains("koramaup.com") ||
+                    downloadUrl.contains("bowfile.com") ||
+                    downloadUrl.contains("file-upload.org") ||
+                    downloadUrl.contains("1fichier.com") ||
+                    downloadUrl.contains("1cloudfile.com") ||
+                    downloadUrl.contains("frdl.io") ||
+                    downloadUrl.contains("lbx.to") -> {
+                        loadExtractor(downloadUrl, data, subtitleCallback, callback)
+                    }
+                    else -> {
+                        // For other download links, try extractor first
+                        loadExtractor(downloadUrl, data, subtitleCallback, callback)
+                    }
+                }
             }
         }
 
@@ -291,19 +232,36 @@ class Animezid : MainAPI() {
             }
         }
 
+        // METHOD 5: Check for direct video sources on the page
+        if (!foundLinks) {
+            document.select("video source[src], source[type^='video/'][src]").forEach { source ->
+                val videoUrl = source.attr("src").trim()
+                if (videoUrl.isNotBlank()) {
+                    foundLinks = true
+                    callback(
+                        newExtractorLink(
+                            source = name,
+                            name = name,
+                            url = fixUrl(videoUrl),
+                            type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = data
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
+                }
+            }
+        }
+
         return foundLinks
     }
 
     // ==================== HELPER FUNCTIONS ====================
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val rawTitle = this.attr("title").trim()
+        val title = this.attr("title").trim()
             .ifBlank { this.selectFirst(".title")?.text()?.trim() }
             ?: return null
-        
-        // Clean the title
-        val cleanTitle = cleanTitleText(rawTitle)
-            .ifBlank { return null }
             
         val href = this.attr("href").takeIf { it.isNotBlank() } ?: return null
         
@@ -312,26 +270,17 @@ class Animezid : MainAPI() {
             ?.ifBlank { this.selectFirst("img")?.attr("src") }
             ?: ""
         
-        // Better detection for movie vs series in search results
-        val isMovie = when {
-            // Title contains movie indicators
-            rawTitle.contains("فيلم") || rawTitle.contains("فلم") -> true
-            // URL contains movie indicators
-            href.contains("/movie/") || href.contains("/movies/") -> true
-            // Search result has specific classes or attributes for movies
-            this.hasClass("movie-film") || this.select(".ribbon").text().contains("فيلم") -> true
-            // If it doesn't look like an episode link
-            !href.contains("/watch.php?vid=") -> true
-            // Default to series (anime)
-            else -> false
-        }
+        // Determine type based on URL or title
+        val isMovie = title.contains("فيلم") || 
+                     href.contains("/movie/") ||
+                     !href.contains("/watch.php?vid=")
 
         return if (isMovie) {
-            newMovieSearchResponse(cleanTitle, fixUrl(href), TvType.Movie) {
+            newMovieSearchResponse(title, fixUrl(href), TvType.Movie) {
                 this.posterUrl = fixUrl(poster)
             }
         } else {
-            newTvSeriesSearchResponse(cleanTitle, fixUrl(href), TvType.Anime) {
+            newTvSeriesSearchResponse(title, fixUrl(href), TvType.Anime) {
                 this.posterUrl = fixUrl(poster)
             }
         }
@@ -345,51 +294,5 @@ class Animezid : MainAPI() {
             url.startsWith("/") -> "$mainUrl$url"
             else -> "$mainUrl/$url"
         }
-    }
-
-    private fun cleanTitleText(text: String): String {
-        return text
-            // Remove welcome messages
-            .replace("مرحباً في موقع انمي زد الأصلي", "")
-            .replace("مرحباً في موقع انمي زد الاصلي", "")
-            .replace("مرحباً في موقع انمي زد", "")
-            .replace("انمي زد الأصلي", "")
-            .replace("انمي زد الاصلي", "")
-            .replace("Animezid", "")
-            .replace("قبام زوتروبويس", "زوتروبويس") // Example from screenshot
-            // Remove "title:" prefix and similar
-            .replace("^title\\s*[:\\.]\\s*".toRegex(RegexOption.IGNORE_CASE), "")
-            .replace("^عنوان\\s*[:\\.]\\s*".toRegex(), "")
-            .replace("^اسم\\s*[:\\.]\\s*".toRegex(), "")
-            // Remove common Arabic prefixes
-            .replace("^فيلم\\s+".toRegex(), "")
-            .replace("^فلم\\s+".toRegex(), "")
-            .replace("^مسلسل\\s+".toRegex(), "")
-            // Remove quality info after |
-            .replace("\\s*\\|.*".toRegex(), "")
-            // Remove dubbing info
-            .replace("\\s*مدبلج.*".toRegex(), "")
-            .replace("\\s*مترجم.*".toRegex(), "")
-            .replace("\\s*بالعربية.*".toRegex(), "")
-            .replace("\\s*بالمصري.*".toRegex(), "")
-            .replace("\\s*مدبلع.*".toRegex(), "") // From screenshot
-            // Clean extra spaces
-            .replace("\\s+".toRegex(), " ")
-            .trim()
-    }
-
-    private fun cleanDescriptionText(text: String): String? {
-        val cleaned = text
-            // Remove welcome messages
-            .replace("مرحباً في موقع انمي زد الأصلي", "")
-            .replace("مرحباً في موقع انمي زد الاصلي", "")
-            .replace("مرحباً في موقع انمي زد", "")
-            .replace("انمي زد الأصلي", "")
-            .replace("انمي زد الاصلي", "")
-            // Clean extra spaces
-            .replace("\\s+".toRegex(), " ")
-            .trim()
-        
-        return cleaned.ifBlank { null }
     }
 }
