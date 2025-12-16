@@ -200,8 +200,30 @@ class Catsuka : MainAPI() {
             val iframeSrc = iframe?.attr("src")
             
             if (iframeSrc != null && iframeSrc.isNotBlank()) {
-                loadExtractor(fixUrl(iframeSrc), data, subtitleCallback, callback)
-                return true
+                // Directly extract video from iframe instead of using loadExtractor
+                try {
+                    val iframeDoc = app.get(fixUrl(iframeSrc)).document
+                    val iframeVideo = iframeDoc.selectFirst("video source[src], video[src]")
+                    val iframeVideoUrl = iframeVideo?.attr("src")
+                    
+                    if (iframeVideoUrl != null && iframeVideoUrl.isNotBlank()) {
+                        callback(
+                            ExtractorLink(
+                                source = name,
+                                name = "Direct Video",
+                                url = fixUrl(iframeVideoUrl),
+                                referer = fixUrl(iframeSrc),
+                                quality = Qualities.Unknown.value,
+                                type = if (iframeVideoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 
+                                       else ExtractorLinkType.VIDEO
+                            )
+                        )
+                        return true
+                    }
+                } catch (e: Exception) {
+                    // If we can't extract from iframe, just return false
+                }
+                return false
             }
             
         } catch (e: Exception) {
