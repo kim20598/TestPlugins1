@@ -47,13 +47,17 @@ class Catsuka : MainAPI() {
             // Extract video items
             val items = extractVideosFromDocument(document)
             
-            newHomePageResponse(
-                request.name,
-                items,
+            // FIXED: Use HomePageResponse constructor instead of newHomePageResponse
+            HomePageResponse(
+                listOf(HomePageList(request.name, items)),
                 hasNext = items.isNotEmpty()
             )
         } catch (e: Exception) {
-            newHomePageResponse(request.name, emptyList())
+            // FIXED: Use HomePageResponse constructor instead of newHomePageResponse
+            HomePageResponse(
+                listOf(HomePageList(request.name, emptyList())),
+                hasNext = false
+            )
         }
     }
 
