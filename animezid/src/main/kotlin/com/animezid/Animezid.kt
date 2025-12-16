@@ -47,7 +47,7 @@ class Animezid : MainAPI() {
         return document.select("a.movie").mapNotNull { it.toSearchResponse() }
     }
 
-    // ==================== LOAD ====================
+    // ==================== LOAD - COMPLETELY REWRITTEN ====================
 
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
@@ -76,19 +76,29 @@ class Animezid : MainAPI() {
         // Clean description
         val description = cleanDescriptionText(rawDescription)
             
-        // Check for episodes (seasons and episodes tabs)
-        val hasSeasons = document.select(".tab-seasons li[data-serie]").isNotEmpty()
+        // Check if this is a series page with multiple episodes/seasons
+        val hasSeasonsTabs = document.select(".tab-seasons li[data-serie]").isNotEmpty()
+        val hasSeasonsEpisodes = document.select(".SeasonsEpisodes").isNotEmpty()
+        
+        // Extract all episodes if this is a series
         val episodes = mutableListOf<Episode>()
         
-        if (hasSeasons) {
-            // This is a series with seasons
+        if (hasSeasonsTabs || hasSeasonsEpisodes) {
+            // This is a series page with multiple episodes
             document.select(".SeasonsEpisodes[data-serie]").forEach { seasonDiv ->
                 val seasonNum = seasonDiv.attr("data-serie").toIntOrNull() ?: 1
                 
                 seasonDiv.select("a[href*='watch.php']").forEach { episodeLink ->
                     val episodeUrl = fixUrl(episodeLink.attr("href"))
                     val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
-                    val episodeTitle = cleanEpisodeTitle(episodeLink.select("span").text(), episodeNum)
+                    
+                    // Get episode title from span or use default
+                    val rawEpisodeTitle = episodeLink.select("span").text().trim()
+                    val episodeTitle = if (rawEpisodeTitle.isNotBlank() && rawEpisodeTitle != "الحلقة") {
+                        rawEpisodeTitle
+                    } else {
+                        "الحلقة $episodeNum"
+                    }
                     
                     episodes.add(
                         newEpisode(episodeUrl) {
@@ -99,50 +109,55 @@ class Animezid : MainAPI() {
                     )
                 }
             }
-        } else {
-            // Check for direct episode links without seasons
-            document.select("a[href*='watch.php?vid=']").forEach { episodeLink ->
-                if (episodeLink.parents().select(".SeasonsEpisodes, .tab-episodes").isNotEmpty()) {
-                    val episodeUrl = fixUrl(episodeLink.attr("href"))
-                    val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
-                    val episodeTitle = cleanEpisodeTitle(episodeLink.select("span").text(), episodeNum)
-                    
-                    episodes.add(
-                        newEpisode(episodeUrl) {
-                            this.name = episodeTitle
-                            this.episode = episodeNum
-                            this.season = 1
-                        }
-                    )
-                }
-            }
         }
         
-        // Better detection for movie vs series
+        // Determine if this is a series or movie
         val isSeries = when {
-            // If we found episodes, it's a series
-            episodes.isNotEmpty() -> true
+            // If we found multiple episodes, it's definitely a series
+            episodes.size > 1 -> true
             // If there are seasons tabs, it's a series
-            document.select(".tab-seasons").isNotEmpty() -> true
-            // If there are episodes tabs, it's a series
-            document.select(".tab-episodes").isNotEmpty() -> true
-            // If title contains series indicators
-            cleanTitle.contains("مسلسل") || 
-            cleanTitle.contains("الموسم") || 
-            cleanTitle.contains("الحلقة") -> true
+            hasSeasonsTabs -> true
+            // If there are seasons episodes divs, it's a series
+            hasSeasonsEpisodes -> true
+            // If title contains series indicators (but not "فيلم")
+            (cleanTitle.contains("الموسم") || 
+             cleanTitle.contains("الحلقة") ||
+             cleanTitle.contains("الجزء")) && 
+             !cleanTitle.contains("فيلم") -> true
             // If description contains series indicators
-            description?.contains("مسلسل") == true || 
             description?.contains("الموسم") == true || 
-            description?.contains("الحلقة") == true -> true
-            // Default to movie if none of the above
+            description?.contains("الحلقة") == true ||
+            description?.contains("مسلسل") == true -> true
+            // Default to movie
             else -> false
         }
         
+        // Get the current episode number if this is an individual episode page
+        val currentEpisodeNum = extractEpisodeNumberFromTitle(cleanTitle)
+        val currentSeasonNum = extractSeasonNumberFromTitle(cleanTitle)
+        
         return if (isSeries) {
-            // TV Series
-            newTvSeriesLoadResponse(cleanTitle, url, TvType.Anime, episodes.distinctBy { "${it.season}_${it.episode}" }) {
-                this.posterUrl = fixUrl(poster)
-                this.plot = description
+            // TV Series - need to determine the series title without episode info
+            val seriesTitle = extractSeriesTitle(cleanTitle)
+            
+            // If this is an individual episode page but we found other episodes
+            if (episodes.isNotEmpty()) {
+                newTvSeriesLoadResponse(seriesTitle, url, TvType.Anime, episodes.distinctBy { "${it.season}_${it.episode}" }) {
+                    this.posterUrl = fixUrl(poster)
+                    this.plot = description
+                }
+            } else {
+                // Individual episode treated as a single-episode series
+                newTvSeriesLoadResponse(seriesTitle, url, TvType.Anime, listOf(
+                    newEpisode(url) {
+                        this.name = cleanTitle
+                        this.episode = currentEpisodeNum
+                        this.season = currentSeasonNum
+                    }
+                )) {
+                    this.posterUrl = fixUrl(poster)
+                    this.plot = description
+                }
             }
         } else {
             // Movie
@@ -299,9 +314,23 @@ class Animezid : MainAPI() {
             ?: ""
         
         // Determine type based on URL or title
-        val isMovie = cleanTitle.contains("فيلم") || 
-                     href.contains("/movie/") ||
-                     !href.contains("/watch.php?vid=")
+        val isMovie = when {
+            // Title contains movie indicators
+            cleanTitle.contains("فيلم") || cleanTitle.contains("فلم") -> true
+            // Check ribbon for movie indicators
+            this.select(".ribbon").text().contains("فيلم") ||
+            this.select(".ribbon").text().contains("فلم") ||
+            this.select(".ribbon").text().contains("WEB-DL") ||
+            this.select(".ribbon").text().contains("BluRay") -> true
+            // Title contains series indicators
+            cleanTitle.contains("الحلقة") || 
+            cleanTitle.contains("الموسم") ||
+            cleanTitle.contains("الجزء") -> false
+            // URL contains movie indicators
+            href.contains("/movie/") || href.contains("/movies/") -> true
+            // Default to series (anime)
+            else -> false
+        }
 
         return if (isMovie) {
             newMovieSearchResponse(cleanTitle, fixUrl(href), TvType.Movie) {
@@ -326,17 +355,7 @@ class Animezid : MainAPI() {
 
     private fun cleanTitleText(text: String): String {
         return text
-            // Remove common prefixes
-            .replace("فيلم\\s*".toRegex(), "")
-            .replace("فلم\\s*".toRegex(), "")
-            .replace("مسلسل\\s*".toRegex(), "")
-            .replace("\\|.*".toRegex(), "") // Remove everything after |
-            .replace("\\s*مدبلج.*".toRegex(), "")
-            .replace("\\s*مترجم.*".toRegex(), "")
-            .replace("\\s*بالعربية.*".toRegex(), "")
-            .replace("\\s*بالمصري.*".toRegex(), "")
-            .replace("\\s*مدبلج مصري.*".toRegex(), "")
-            .replace("\\s*مدبلج بالعربية.*".toRegex(), "")
+            // Remove welcome messages
             .replace("مرحباً في موقع", "")
             .replace("انمي زد الاصلي", "")
             .replace("انمي زد الأصل", "")
@@ -359,15 +378,31 @@ class Animezid : MainAPI() {
         return cleaned.ifBlank { null }
     }
 
-    private fun cleanEpisodeTitle(text: String, episodeNum: Int): String {
-        val cleaned = text
-            .replace("الحلقة\\s*".toRegex(), "")
+    private fun extractEpisodeNumberFromTitle(title: String): Int {
+        // Try to extract episode number from title like "الحلقة 1184"
+        val episodeRegex = Regex("الحلقة\\s*(\\d+)")
+        val match = episodeRegex.find(title)
+        return match?.groupValues?.get(1)?.toIntOrNull() ?: 1
+    }
+
+    private fun extractSeasonNumberFromTitle(title: String): Int {
+        // Try to extract season number from title like "الجزء 25" or "الموسم 25"
+        val seasonRegex = Regex("(الجزء|الموسم)\\s*(\\d+)")
+        val match = seasonRegex.find(title)
+        return match?.groupValues?.get(2)?.toIntOrNull() ?: 1
+    }
+
+    private fun extractSeriesTitle(title: String): String {
+        // Extract series title by removing episode/season info
+        return title
+            .replace(Regex("الحلقة\\s*\\d+"), "")
+            .replace(Regex("الجزء\\s*\\d+"), "")
+            .replace(Regex("الموسم\\s*\\d+"), "")
+            .replace("مدبلجة", "")
+            .replace("مدبلج", "")
+            .replace("مترجمة", "")
+            .replace("مترجم", "")
             .trim()
-        
-        return if (cleaned.isBlank() || cleaned == "الحلقة") {
-            "الحلقة $episodeNum"
-        } else {
-            cleaned
-        }
+            .ifBlank { title }
     }
 }
