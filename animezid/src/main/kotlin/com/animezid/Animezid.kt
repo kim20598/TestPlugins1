@@ -53,11 +53,14 @@ class Animezid : MainAPI() {
         val document = app.get(url).document
         
         // Extract title from multiple possible locations
-        val title = document.selectFirst("meta[itemprop=name]")?.attr("content")
+        val rawTitle = document.selectFirst("meta[itemprop=name]")?.attr("content")
             ?: document.selectFirst("h1 span strong")?.text()
             ?: document.selectFirst("h1.post__name")?.text()
             ?: document.selectFirst("h1")?.text()
-            ?: "Unknown"
+            ?: ""
+
+        // Clean the title - remove prefixes and unwanted text
+        val cleanTitle = cleanTitleText(rawTitle)
 
         // Extract poster from meta tags or images
         val poster = document.selectFirst("meta[itemprop=image]")?.attr("content")
@@ -65,10 +68,13 @@ class Animezid : MainAPI() {
             ?: document.selectFirst("img.lazy")?.attr("data-src")
             ?: ""
             
-        // Extract description
-        val description = document.selectFirst(".pm-video-description p.description")?.text()?.trim()
+        // Extract description - clean it up
+        val rawDescription = document.selectFirst(".pm-video-description p.description")?.text()?.trim()
             ?: document.selectFirst("meta[name=description]")?.attr("content")?.trim()
             ?: ""
+        
+        // Clean description
+        val description = cleanDescriptionText(rawDescription)
             
         // Check for episodes (seasons and episodes tabs)
         val hasSeasons = document.select(".tab-seasons li[data-serie]").isNotEmpty()
@@ -82,8 +88,7 @@ class Animezid : MainAPI() {
                 seasonDiv.select("a[href*='watch.php']").forEach { episodeLink ->
                     val episodeUrl = fixUrl(episodeLink.attr("href"))
                     val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
-                    val episodeTitle = episodeLink.select("span").text()
-                        .ifBlank { "الحلقة $episodeNum" }
+                    val episodeTitle = cleanEpisodeTitle(episodeLink.select("span").text(), episodeNum)
                     
                     episodes.add(
                         newEpisode(episodeUrl) {
@@ -100,8 +105,7 @@ class Animezid : MainAPI() {
                 if (episodeLink.parents().select(".SeasonsEpisodes, .tab-episodes").isNotEmpty()) {
                     val episodeUrl = fixUrl(episodeLink.attr("href"))
                     val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
-                    val episodeTitle = episodeLink.select("span").text()
-                        .ifBlank { "الحلقة $episodeNum" }
+                    val episodeTitle = cleanEpisodeTitle(episodeLink.select("span").text(), episodeNum)
                     
                     episodes.add(
                         newEpisode(episodeUrl) {
@@ -114,15 +118,35 @@ class Animezid : MainAPI() {
             }
         }
         
-        return if (episodes.isNotEmpty()) {
+        // Better detection for movie vs series
+        val isSeries = when {
+            // If we found episodes, it's a series
+            episodes.isNotEmpty() -> true
+            // If there are seasons tabs, it's a series
+            document.select(".tab-seasons").isNotEmpty() -> true
+            // If there are episodes tabs, it's a series
+            document.select(".tab-episodes").isNotEmpty() -> true
+            // If title contains series indicators
+            cleanTitle.contains("مسلسل") || 
+            cleanTitle.contains("الموسم") || 
+            cleanTitle.contains("الحلقة") -> true
+            // If description contains series indicators
+            description?.contains("مسلسل") == true || 
+            description?.contains("الموسم") == true || 
+            description?.contains("الحلقة") == true -> true
+            // Default to movie if none of the above
+            else -> false
+        }
+        
+        return if (isSeries) {
             // TV Series
-            newTvSeriesLoadResponse(title, url, TvType.Anime, episodes.distinctBy { "${it.season}_${it.episode}" }) {
+            newTvSeriesLoadResponse(cleanTitle, url, TvType.Anime, episodes.distinctBy { "${it.season}_${it.episode}" }) {
                 this.posterUrl = fixUrl(poster)
                 this.plot = description
             }
         } else {
             // Movie
-            newMovieLoadResponse(title, url, TvType.Movie, url) {
+            newMovieLoadResponse(cleanTitle, url, TvType.Movie, url) {
                 this.posterUrl = fixUrl(poster)
                 this.plot = description
             }
@@ -259,9 +283,13 @@ class Animezid : MainAPI() {
     // ==================== HELPER FUNCTIONS ====================
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val title = this.attr("title").trim()
+        val rawTitle = this.attr("title").trim()
             .ifBlank { this.selectFirst(".title")?.text()?.trim() }
             ?: return null
+        
+        // Clean the title
+        val cleanTitle = cleanTitleText(rawTitle)
+            .ifBlank { return null }
             
         val href = this.attr("href").takeIf { it.isNotBlank() } ?: return null
         
@@ -271,16 +299,16 @@ class Animezid : MainAPI() {
             ?: ""
         
         // Determine type based on URL or title
-        val isMovie = title.contains("فيلم") || 
+        val isMovie = cleanTitle.contains("فيلم") || 
                      href.contains("/movie/") ||
                      !href.contains("/watch.php?vid=")
 
         return if (isMovie) {
-            newMovieSearchResponse(title, fixUrl(href), TvType.Movie) {
+            newMovieSearchResponse(cleanTitle, fixUrl(href), TvType.Movie) {
                 this.posterUrl = fixUrl(poster)
             }
         } else {
-            newTvSeriesSearchResponse(title, fixUrl(href), TvType.Anime) {
+            newTvSeriesSearchResponse(cleanTitle, fixUrl(href), TvType.Anime) {
                 this.posterUrl = fixUrl(poster)
             }
         }
@@ -293,6 +321,53 @@ class Animezid : MainAPI() {
             url.startsWith("//") -> "https:$url"
             url.startsWith("/") -> "$mainUrl$url"
             else -> "$mainUrl/$url"
+        }
+    }
+
+    private fun cleanTitleText(text: String): String {
+        return text
+            // Remove common prefixes
+            .replace("فيلم\\s*".toRegex(), "")
+            .replace("فلم\\s*".toRegex(), "")
+            .replace("مسلسل\\s*".toRegex(), "")
+            .replace("\\|.*".toRegex(), "") // Remove everything after |
+            .replace("\\s*مدبلج.*".toRegex(), "")
+            .replace("\\s*مترجم.*".toRegex(), "")
+            .replace("\\s*بالعربية.*".toRegex(), "")
+            .replace("\\s*بالمصري.*".toRegex(), "")
+            .replace("\\s*مدبلج مصري.*".toRegex(), "")
+            .replace("\\s*مدبلج بالعربية.*".toRegex(), "")
+            .replace("مرحباً في موقع", "")
+            .replace("انمي زد الاصلي", "")
+            .replace("انمي زد الأصل", "")
+            .replace("مرحباً في موقع انمي زد الأصل", "")
+            .replace("مرحباً في موقع انمي زد الاصلي", "")
+            .replace("\\s+".toRegex(), " ") // Replace multiple spaces with single space
+            .trim()
+            .ifBlank { text.trim() } // Return original if cleaned is empty
+    }
+
+    private fun cleanDescriptionText(text: String): String? {
+        val cleaned = text
+            .replace("مرحباً في موقع", "")
+            .replace("انمي زد الاصلي", "")
+            .replace("انمي زد الأصل", "")
+            .replace("مرحباً في موقع انمي زد الأصل", "")
+            .replace("مرحباً في موقع انمي زد الاصلي", "")
+            .trim()
+        
+        return cleaned.ifBlank { null }
+    }
+
+    private fun cleanEpisodeTitle(text: String, episodeNum: Int): String {
+        val cleaned = text
+            .replace("الحلقة\\s*".toRegex(), "")
+            .trim()
+        
+        return if (cleaned.isBlank() || cleaned == "الحلقة") {
+            "الحلقة $episodeNum"
+        } else {
+            cleaned
         }
     }
 }
