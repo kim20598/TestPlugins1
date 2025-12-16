@@ -53,20 +53,14 @@ class Animezid : MainAPI() {
         val document = app.get(url).document
         
         // Extract title from multiple possible locations
-        val title = document.selectFirst("meta[itemprop=name]")?.attr("content")
+        val rawTitle = document.selectFirst("meta[itemprop=name]")?.attr("content")
             ?: document.selectFirst("h1 span strong")?.text()
             ?: document.selectFirst("h1.post__name")?.text()
             ?: document.selectFirst("h1")?.text()
-            ?: "Unknown"
+            ?: ""
 
-        // Remove welcome message from title
-        val cleanTitle = title.replace("مرحباً في موقع", "")
-            .replace("انمي زد الاصلي", "")
-            .replace("انمي زد الأصل", "")
-            .replace("مرحباً في موقع انمي زد الأصل", "")
-            .replace("مرحباً في موقع انمي زد الاصلي", "")
-            .trim()
-            .ifBlank { "Unknown" }
+        // Clean the title - remove prefixes and unwanted text
+        val cleanTitle = cleanTitleText(rawTitle)
 
         // Extract poster from meta tags or images
         val poster = document.selectFirst("meta[itemprop=image]")?.attr("content")
@@ -80,14 +74,8 @@ class Animezid : MainAPI() {
             ?: document.selectFirst("meta[name=description]")?.attr("content")?.trim()
             ?: ""
         
-        // Clean description from welcome messages
-        val description = rawDescription.replace("مرحباً في موقع", "")
-            .replace("انمي زد الاصلي", "")
-            .replace("انمي زد الأصل", "")
-            .replace("مرحباً في موقع انمي زد الأصل", "")
-            .replace("مرحباً في موقع انمي زد الاصلي", "")
-            .trim()
-            .ifBlank { null }
+        // Clean description
+        val description = cleanDescriptionText(rawDescription)
             
         // Check for episodes (seasons and episodes tabs)
         val episodes = mutableListOf<Episode>()
@@ -108,8 +96,7 @@ class Animezid : MainAPI() {
                     seasonDiv.select("a[href*='watch.php']").forEach { episodeLink ->
                         val episodeUrl = fixUrl(episodeLink.attr("href"))
                         val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
-                        val episodeTitle = episodeLink.select("span").text()
-                            .ifBlank { "الحلقة $episodeNum" }
+                        val episodeTitle = cleanEpisodeTitle(episodeLink.select("span").text(), episodeNum)
                         
                         episodes.add(
                             newEpisode(episodeUrl) {
@@ -125,8 +112,7 @@ class Animezid : MainAPI() {
                 document.select(".tab-episodes .SeasonsEpisodes a[href*='watch.php']").forEach { episodeLink ->
                     val episodeUrl = fixUrl(episodeLink.attr("href"))
                     val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
-                    val episodeTitle = episodeLink.select("span").text()
-                        .ifBlank { "الحلقة $episodeNum" }
+                    val episodeTitle = cleanEpisodeTitle(episodeLink.select("span").text(), episodeNum)
                     
                     episodes.add(
                         newEpisode(episodeUrl) {
@@ -143,8 +129,7 @@ class Animezid : MainAPI() {
                 document.select(".SeasonsEpisodes a[href*='watch.php']").forEach { episodeLink ->
                     val episodeUrl = fixUrl(episodeLink.attr("href"))
                     val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
-                    val episodeTitle = episodeLink.select("span").text()
-                        .ifBlank { "الحلقة $episodeNum" }
+                    val episodeTitle = cleanEpisodeTitle(episodeLink.select("span").text(), episodeNum)
                     
                     episodes.add(
                         newEpisode(episodeUrl) {
@@ -244,17 +229,12 @@ class Animezid : MainAPI() {
     // ==================== HELPER FUNCTIONS ====================
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val title = this.attr("title").trim()
+        val rawTitle = this.attr("title").trim()
             .ifBlank { this.selectFirst(".title")?.text()?.trim() }
             ?: return null
         
-        // Clean title from welcome messages
-        val cleanTitle = title.replace("مرحباً في موقع", "")
-            .replace("انمي زد الاصلي", "")
-            .replace("انمي زد الأصل", "")
-            .replace("مرحباً في موقع انمي زد الأصل", "")
-            .replace("مرحباً في موقع انمي زد الاصلي", "")
-            .trim()
+        // Clean the title
+        val cleanTitle = cleanTitleText(rawTitle)
             .ifBlank { return null }
             
         val href = this.attr("href").takeIf { it.isNotBlank() } ?: return null
@@ -307,6 +287,53 @@ class Animezid : MainAPI() {
             url.startsWith("//") -> "https:$url"
             url.startsWith("/") -> "$mainUrl$url"
             else -> "$mainUrl/$url"
+        }
+    }
+
+    private fun cleanTitleText(text: String): String {
+        return text
+            // Remove common prefixes
+            .replace("فيلم\\s*".toRegex(), "")
+            .replace("فلم\\s*".toRegex(), "")
+            .replace("مسلسل\\s*".toRegex(), "")
+            .replace("\\|.*".toRegex(), "") // Remove everything after |
+            .replace("\\s*مدبلج.*".toRegex(), "")
+            .replace("\\s*مترجم.*".toRegex(), "")
+            .replace("\\s*بالعربية.*".toRegex(), "")
+            .replace("\\s*بالمصري.*".toRegex(), "")
+            .replace("\\s*مدبلج مصري.*".toRegex(), "")
+            .replace("\\s*مدبلج بالعربية.*".toRegex(), "")
+            .replace("مرحباً في موقع", "")
+            .replace("انمي زد الاصلي", "")
+            .replace("انمي زد الأصل", "")
+            .replace("مرحباً في موقع انمي زد الأصل", "")
+            .replace("مرحباً في موقع انمي زد الاصلي", "")
+            .replace("\\s+".toRegex(), " ") // Replace multiple spaces with single space
+            .trim()
+            .ifBlank { text.trim() } // Return original if cleaned is empty
+    }
+
+    private fun cleanDescriptionText(text: String): String? {
+        val cleaned = text
+            .replace("مرحباً في موقع", "")
+            .replace("انمي زد الاصلي", "")
+            .replace("انمي زد الأصل", "")
+            .replace("مرحباً في موقع انمي زد الأصل", "")
+            .replace("مرحباً في موقع انمي زد الاصلي", "")
+            .trim()
+        
+        return cleaned.ifBlank { null }
+    }
+
+    private fun cleanEpisodeTitle(text: String, episodeNum: Int): String {
+        val cleaned = text
+            .replace("الحلقة\\s*".toRegex(), "")
+            .trim()
+        
+        return if (cleaned.isBlank() || cleaned == "الحلقة") {
+            "الحلقة $episodeNum"
+        } else {
+            cleaned
         }
     }
 }
