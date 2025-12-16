@@ -141,7 +141,7 @@ class Animezid : MainAPI() {
         var foundLinks = false
 
         // METHOD 1: Extract from server buttons with data-embed
-        document.select("#xservers button[data-embed]").forEach { serverButton ->
+        document.select("#xservers button[data-embed], .xservers button[data-embed], button[data-embed]").forEach { serverButton ->
             val embedUrl = serverButton.attr("data-embed").trim()
             val serverName = serverButton.text().trim().ifBlank { "Server" }
             
@@ -152,23 +152,28 @@ class Animezid : MainAPI() {
             }
         }
 
-        // METHOD 1b: Hardcoded servers from the provided list (as fallback)
+        // METHOD 1b: Try to extract video ID and construct server URLs dynamically
         if (!foundLinks) {
-            val hardcodedServers = listOf(
-                "https://megamax.me/iframe/0yPrsAtaPPgav" to "سيرفر 1",
-                "https://zid.upns.online/#e9vedg" to "سيرفر 2",
-                "https://zid.streamcasthub.store/#fvzvtx" to "سيرفر 3",
-                "https://zid.vidplayer.live/#x11i6" to "سيرفر 4",
-                "https://zid.rpmhub.site/#96ns11" to "سيرفر 5",
-                "https://dsvplay.com/e/tuo5dxs1bufw" to "سيرفر 6",
-                "https://listeamed.net/e/g9Vd5J8Z3DgEqQj" to "سيرفر 7",
-                "https://vidtube.pro/e/sq83wifidow3.html" to "سيرفر 8",
-                "https://uqload.cx/embed-kjgvbejmf9kw.html" to "سيرفر 9"
-            )
-            
-            for ((serverUrl, serverName) in hardcodedServers) {
-                foundLinks = true
-                loadExtractor(serverUrl, data, subtitleCallback, callback)
+            // Extract video ID from URL
+            val videoId = extractVideoId(data)
+            if (videoId != null) {
+                // Try different server patterns for this video
+                val serverPatterns = listOf(
+                    "https://megamax.me/iframe/$videoId",
+                    "https://zid.upns.online/#$videoId",
+                    "https://zid.streamcasthub.store/#$videoId",
+                    "https://zid.vidplayer.live/#$videoId",
+                    "https://zid.rpmhub.site/#$videoId",
+                    "https://dsvplay.com/e/$videoId",
+                    "https://listeamed.net/e/$videoId",
+                    "https://vidtube.pro/e/$videoId.html",
+                    "https://uqload.cx/embed-$videoId.html"
+                )
+                
+                for (serverUrl in serverPatterns) {
+                    foundLinks = true
+                    loadExtractor(serverUrl, data, subtitleCallback, callback)
+                }
             }
         }
 
@@ -246,11 +251,25 @@ class Animezid : MainAPI() {
             }
         }
 
-        // METHOD 5: JavaScript onclick simulation for server switching
+        // METHOD 5: Check for video sources in the page itself
         if (!foundLinks) {
-            // The JavaScript shows servers update #Playerholder with either HTML or iframe src
-            // Since we can't execute JavaScript, we already handled the data-embed attributes above
-            // which contain the actual URLs
+            document.select("video source[src], source[type^='video/']").forEach { source ->
+                val videoUrl = source.attr("src").trim()
+                if (videoUrl.isNotBlank()) {
+                    foundLinks = true
+                    callback(
+                        newExtractorLink(
+                            source = name,
+                            name = name,
+                            url = fixUrl(videoUrl),
+                            type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = data
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
+                }
+            }
         }
 
         return foundLinks
@@ -294,5 +313,55 @@ class Animezid : MainAPI() {
             url.startsWith("/") -> "$mainUrl$url"
             else -> "$mainUrl/$url"
         }
+    }
+
+    private fun extractVideoId(url: String): String? {
+        // Try to extract from URL parameters
+        val vidMatch = Regex("vid=([a-zA-Z0-9]+)").find(url)
+        if (vidMatch != null) {
+            return vidMatch.groupValues[1]
+        }
+        
+        // Try to extract from embed URLs in the page
+        val doc = app.get(url).document
+        val embedUrl = doc.selectFirst("meta[itemprop=embedURL]")?.attr("content")
+        
+        if (embedUrl != null) {
+            // Extract from embed URL
+            val embedId = Regex("vid=([a-zA-Z0-9]+)").find(embedUrl)?.groupValues?.get(1)
+            if (embedId != null) return embedId
+            
+            // Try other patterns
+            val patterns = listOf(
+                Regex("/([a-zA-Z0-9]+)$"),
+                Regex("#([a-zA-Z0-9]+)$"),
+                Regex("e/([a-zA-Z0-9]+)")
+            )
+            
+            for (pattern in patterns) {
+                val match = pattern.find(embedUrl)
+                if (match != null) return match.groupValues[1]
+            }
+        }
+        
+        // Try to get from server buttons
+        val serverButton = doc.selectFirst("button[data-embed]")
+        if (serverButton != null) {
+            val embedAttr = serverButton.attr("data-embed")
+            // Extract ID from embed URL
+            val idPatterns = listOf(
+                Regex("/([a-zA-Z0-9]+)$"),
+                Regex("#([a-zA-Z0-9]+)$"),
+                Regex("e/([a-zA-Z0-9]+)"),
+                Regex("embed-([a-zA-Z0-9]+)")
+            )
+            
+            for (pattern in idPatterns) {
+                val match = pattern.find(embedAttr)
+                if (match != null) return match.groupValues[1]
+            }
+        }
+        
+        return null
     }
 }
