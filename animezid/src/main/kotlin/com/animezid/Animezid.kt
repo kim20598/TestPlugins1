@@ -152,6 +152,26 @@ class Animezid : MainAPI() {
             }
         }
 
+        // METHOD 1b: Hardcoded servers from the provided list (as fallback)
+        if (!foundLinks) {
+            val hardcodedServers = listOf(
+                "https://megamax.me/iframe/0yPrsAtaPPgav" to "سيرفر 1",
+                "https://zid.upns.online/#e9vedg" to "سيرفر 2",
+                "https://zid.streamcasthub.store/#fvzvtx" to "سيرفر 3",
+                "https://zid.vidplayer.live/#x11i6" to "سيرفر 4",
+                "https://zid.rpmhub.site/#96ns11" to "سيرفر 5",
+                "https://dsvplay.com/e/tuo5dxs1bufw" to "سيرفر 6",
+                "https://listeamed.net/e/g9Vd5J8Z3DgEqQj" to "سيرفر 7",
+                "https://vidtube.pro/e/sq83wifidow3.html" to "سيرفر 8",
+                "https://uqload.cx/embed-kjgvbejmf9kw.html" to "سيرفر 9"
+            )
+            
+            for ((serverUrl, serverName) in hardcodedServers) {
+                foundLinks = true
+                loadExtractor(serverUrl, data, subtitleCallback, callback)
+            }
+        }
+
         // METHOD 2: Get the currently loaded iframe in Playerholder
         if (!foundLinks) {
             document.selectFirst("#Playerholder iframe")?.let { iframe ->
