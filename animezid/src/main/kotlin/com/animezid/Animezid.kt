@@ -129,7 +129,7 @@ class Animezid : MainAPI() {
         }
     }
 
-    // ==================== LOAD LINKS - SIMPLIFIED AND FIXED VERSION ====================
+    // ==================== LOAD LINKS - FIXED VERSION ====================
 
     override suspend fun loadLinks(
         data: String,
@@ -147,8 +147,6 @@ class Animezid : MainAPI() {
             
             if (embedUrl.isNotBlank()) {
                 foundLinks = true
-                // Log for debugging
-                println("Found server: $serverName - $embedUrl")
                 loadExtractor(embedUrl, data, subtitleCallback, callback)
             }
         }
@@ -159,7 +157,6 @@ class Animezid : MainAPI() {
                 val iframeSrc = iframe.attr("src").trim()
                 if (iframeSrc.isNotBlank() && iframeSrc != "about:blank") {
                     foundLinks = true
-                    println("Found iframe: $iframeSrc")
                     loadExtractor(iframeSrc, data, subtitleCallback, callback)
                 }
             }
@@ -168,12 +165,11 @@ class Animezid : MainAPI() {
         // METHOD 3: Extract download links (these are file hosting sites)
         document.select("a.dl.show_dl.api[href]").forEach { downloadLink ->
             val downloadUrl = downloadLink.attr("href").trim()
-            val quality = downloadLink.select("span").firstOrNull()?.text() ?: "Unknown"
+            val qualityText = downloadLink.select("span").firstOrNull()?.text() ?: "Unknown"
             val host = downloadLink.select("span").getOrNull(1)?.text() ?: "Download"
             
             if (downloadUrl.isNotBlank() && downloadUrl.startsWith("http")) {
                 foundLinks = true
-                println("Found download link: $quality - $host - $downloadUrl")
                 
                 // For file hosting sites, try to load them with extractors
                 when {
@@ -187,29 +183,8 @@ class Animezid : MainAPI() {
                         loadExtractor(downloadUrl, data, subtitleCallback, callback)
                     }
                     else -> {
-                        // For other download links, try as direct links
-                        try {
-                            callback(
-                                newExtractorLink(
-                                    source = name,
-                                    name = "$quality - $host",
-                                    url = fixUrl(downloadUrl),
-                                    type = ExtractorLinkType.DIRECT
-                                ) {
-                                    this.referer = data
-                                    this.quality = when {
-                                        quality.contains("1080") -> Qualities.FullHDP.value
-                                        quality.contains("720") -> Qualities.HDP.value
-                                        quality.contains("480") -> Qualities.SDVD.value
-                                        quality.contains("360") -> Qualities.SD.value
-                                        else -> Qualities.Unknown.value
-                                    }
-                                }
-                            )
-                        } catch (e: Exception) {
-                            // If direct link fails, try extractor
-                            loadExtractor(downloadUrl, data, subtitleCallback, callback)
-                        }
+                        // For other download links, try extractor first
+                        loadExtractor(downloadUrl, data, subtitleCallback, callback)
                     }
                 }
             }
@@ -220,7 +195,6 @@ class Animezid : MainAPI() {
             document.selectFirst("meta[itemprop=embedURL]")?.attr("content")?.let { embedUrl ->
                 if (embedUrl.isNotBlank() && embedUrl.contains("embed.php")) {
                     foundLinks = true
-                    println("Found embed URL: $embedUrl")
                     // Try to extract from embed page
                     try {
                         val embedDoc = app.get(embedUrl).document
@@ -264,7 +238,6 @@ class Animezid : MainAPI() {
                 val videoUrl = source.attr("src").trim()
                 if (videoUrl.isNotBlank()) {
                     foundLinks = true
-                    println("Found direct video source: $videoUrl")
                     callback(
                         newExtractorLink(
                             source = name,
