@@ -71,8 +71,10 @@ class Animezid : MainAPI() {
             ?: ""
             
         // Check for episodes (seasons and episodes tabs)
-        val hasSeasons = document.select(".tab-seasons li[data-serie]").isNotEmpty()
         val episodes = mutableListOf<Episode>()
+        
+        // METHOD 1: Check for seasons and episodes in the proper structure
+        val hasSeasons = document.select(".tab-seasons li[data-serie]").isNotEmpty()
         
         if (hasSeasons) {
             // This is a series with seasons
@@ -95,26 +97,73 @@ class Animezid : MainAPI() {
                 }
             }
         } else {
-            // Check for direct episode links without seasons
-            document.select("a[href*='watch.php?vid=']").forEach { episodeLink ->
-                if (episodeLink.parents().select(".SeasonsEpisodes, .tab-episodes").isNotEmpty()) {
-                    val episodeUrl = fixUrl(episodeLink.attr("href"))
-                    val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
-                    val episodeTitle = episodeLink.select("span").text()
-                        .ifBlank { "الحلقة $episodeNum" }
-                    
-                    episodes.add(
-                        newEpisode(episodeUrl) {
-                            this.name = episodeTitle
-                            this.episode = episodeNum
-                            this.season = 1
-                        }
-                    )
+            // METHOD 2: Check for episodes without seasons (direct episodes list)
+            document.select(".tab-episodes .SeasonsEpisodes a[href*='watch.php']").forEach { episodeLink ->
+                val episodeUrl = fixUrl(episodeLink.attr("href"))
+                val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
+                val episodeTitle = episodeLink.select("span").text()
+                    .ifBlank { "الحلقة $episodeNum" }
+                
+                episodes.add(
+                    newEpisode(episodeUrl) {
+                        this.name = episodeTitle
+                        this.episode = episodeNum
+                        this.season = 1
+                    }
+                )
+            }
+            
+            // METHOD 3: Check for any watch.php links that might be episodes
+            if (episodes.isEmpty()) {
+                document.select("a[href*='watch.php?vid=']").forEach { episodeLink ->
+                    // Skip if it's the current video or not in an episodes section
+                    if (!episodeLink.attr("href").contains(url.substringAfterLast("vid=")) &&
+                        (episodeLink.parents().select(".SeasonsEpisodes, .tab-episodes, .pm-video-watch-episodes").isNotEmpty() ||
+                         episodeLink.text().contains("الحلقة") || 
+                         episodeLink.select("em").isNotEmpty())) {
+                        
+                        val episodeUrl = fixUrl(episodeLink.attr("href"))
+                        val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
+                        val episodeTitle = episodeLink.text().trim()
+                            .ifBlank { "الحلقة ${episodeLink.select("em").text()}" }
+                            .ifBlank { "الحلقة $episodeNum" }
+                        
+                        episodes.add(
+                            newEpisode(episodeUrl) {
+                                this.name = episodeTitle
+                                this.episode = episodeNum
+                                this.season = 1
+                            }
+                        )
+                    }
                 }
             }
         }
         
-        return if (episodes.isNotEmpty()) {
+        // Better detection for movie vs series
+        val isSeries = when {
+            // If we found episodes, it's a series
+            episodes.isNotEmpty() -> true
+            // If there are seasons tabs, it's a series
+            document.select(".tab-seasons").isNotEmpty() -> true
+            // If there are episodes tabs, it's a series
+            document.select(".tab-episodes").isNotEmpty() -> true
+            // If title contains series indicators
+            title.contains("مسلسل") || 
+            title.contains("الموسم") || 
+            title.contains("الحلقة") -> true
+            // If description contains series indicators
+            description.contains("مسلسل") || 
+            description.contains("الموسم") || 
+            description.contains("الحلقة") -> true
+            // If URL indicates a movie category
+            url.contains("/category.php?cat=movies") ||
+            url.contains("/movie/") -> false
+            // Default to movie if none of the above
+            else -> false
+        }
+        
+        return if (isSeries) {
             // TV Series
             newTvSeriesLoadResponse(title, url, TvType.Anime, episodes.distinctBy { "${it.season}_${it.episode}" }) {
                 this.posterUrl = fixUrl(poster)
@@ -172,21 +221,7 @@ class Animezid : MainAPI() {
                 foundLinks = true
                 
                 // For file hosting sites, try to load them with extractors
-                when {
-                    downloadUrl.contains("koramaup.com") ||
-                    downloadUrl.contains("bowfile.com") ||
-                    downloadUrl.contains("file-upload.org") ||
-                    downloadUrl.contains("1fichier.com") ||
-                    downloadUrl.contains("1cloudfile.com") ||
-                    downloadUrl.contains("frdl.io") ||
-                    downloadUrl.contains("lbx.to") -> {
-                        loadExtractor(downloadUrl, data, subtitleCallback, callback)
-                    }
-                    else -> {
-                        // For other download links, try extractor first
-                        loadExtractor(downloadUrl, data, subtitleCallback, callback)
-                    }
-                }
+                loadExtractor(downloadUrl, data, subtitleCallback, callback)
             }
         }
 
@@ -270,10 +305,19 @@ class Animezid : MainAPI() {
             ?.ifBlank { this.selectFirst("img")?.attr("src") }
             ?: ""
         
-        // Determine type based on URL or title
-        val isMovie = title.contains("فيلم") || 
-                     href.contains("/movie/") ||
-                     !href.contains("/watch.php?vid=")
+        // Better detection for movie vs series in search results
+        val isMovie = when {
+            // Title contains movie indicators
+            title.contains("فيلم") -> true
+            // URL contains movie indicators
+            href.contains("/movie/") || href.contains("/movies/") -> true
+            // Search result has specific classes or attributes for movies
+            this.hasClass("movie-film") || this.select(".ribbon").text().contains("فيلم") -> true
+            // If it doesn't look like an episode link
+            !href.contains("/watch.php?vid=") -> true
+            // Default to series (anime)
+            else -> false
+        }
 
         return if (isMovie) {
             newMovieSearchResponse(title, fixUrl(href), TvType.Movie) {
