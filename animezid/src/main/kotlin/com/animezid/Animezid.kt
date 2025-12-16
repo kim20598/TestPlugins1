@@ -3,7 +3,6 @@ package com.animezid
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import org.jsoup.Jsoup
 import java.net.URLEncoder
 
 class Animezid : MainAPI() {
@@ -47,128 +46,125 @@ class Animezid : MainAPI() {
         return document.select("a.movie").mapNotNull { it.toSearchResponse() }
     }
 
-    // ==================== LOAD - COMPLETELY REWRITTEN ====================
+    // ==================== LOAD - CLEAN VERSION ====================
 
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
         
-        // Extract title from multiple possible locations
-        val rawTitle = document.selectFirst("meta[itemprop=name]")?.attr("content")
+        // Extract title
+        val rawTitle = document.selectFirst("h1.post__name")?.text()
             ?: document.selectFirst("h1 span strong")?.text()
-            ?: document.selectFirst("h1.post__name")?.text()
             ?: document.selectFirst("h1")?.text()
             ?: ""
 
-        // Clean the title - remove prefixes and unwanted text
-        val cleanTitle = cleanTitleText(rawTitle)
-
-        // Extract poster from meta tags or images
+        val title = cleanTitleText(rawTitle)
+        
+        // Extract poster
         val poster = document.selectFirst("meta[itemprop=image]")?.attr("content")
-            ?: document.selectFirst("meta[itemprop=thumbnailUrl]")?.attr("content")
+            ?: document.selectFirst("meta[property='og:image']")?.attr("content")
             ?: document.selectFirst("img.lazy")?.attr("data-src")
             ?: ""
             
-        // Extract description - clean it up
-        val rawDescription = document.selectFirst(".pm-video-description p.description")?.text()?.trim()
+        // Extract description
+        val description = document.selectFirst(".pm-video-description p.description")?.text()?.trim()
             ?: document.selectFirst("meta[name=description]")?.attr("content")?.trim()
             ?: ""
         
-        // Clean description
-        val description = cleanDescriptionText(rawDescription)
-            
-        // Check if this is a series page with multiple episodes/seasons
-        val hasSeasonsTabs = document.select(".tab-seasons li[data-serie]").isNotEmpty()
-        val hasSeasonsEpisodes = document.select(".SeasonsEpisodes").isNotEmpty()
+        // Check if this is a series with seasons tabs
+        val seasonsTabs = document.select(".tab-seasons li[data-serie]")
         
-        // Extract all episodes if this is a series
-        val episodes = mutableListOf<Episode>()
+        // Check if this page has multiple episodes in SeasonsEpisodes
+        val hasMultipleEpisodes = document.select(".SeasonsEpisodes").isNotEmpty()
         
-        if (hasSeasonsTabs || hasSeasonsEpisodes) {
-            // This is a series page with multiple episodes
-            document.select(".SeasonsEpisodes[data-serie]").forEach { seasonDiv ->
-                val seasonNum = seasonDiv.attr("data-serie").toIntOrNull() ?: 1
-                
-                seasonDiv.select("a[href*='watch.php']").forEach { episodeLink ->
-                    val episodeUrl = fixUrl(episodeLink.attr("href"))
-                    val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
-                    
-                    // Get episode title from span or use default
-                    val rawEpisodeTitle = episodeLink.select("span").text().trim()
-                    val episodeTitle = if (rawEpisodeTitle.isNotBlank() && rawEpisodeTitle != "الحلقة") {
-                        rawEpisodeTitle
-                    } else {
-                        "الحلقة $episodeNum"
-                    }
-                    
-                    episodes.add(
-                        newEpisode(episodeUrl) {
-                            this.name = episodeTitle
-                            this.episode = episodeNum
-                            this.season = seasonNum
-                        }
-                    )
-                }
-            }
-        }
+        // Check for movie indicators
+        val isMovie = title.contains("فيلم") || 
+                     title.contains("فلم") ||
+                     document.select(".ribbon").any { it.text().contains("فيلم") || it.text().contains("فلم") } ||
+                     url.contains("/movie/") ||
+                     !hasMultipleEpisodes && seasonsTabs.isEmpty() && !title.contains("الحلقة")
         
-        // Determine if this is a series or movie
-        val isSeries = when {
-            // If we found multiple episodes, it's definitely a series
-            episodes.size > 1 -> true
-            // If there are seasons tabs, it's a series
-            hasSeasonsTabs -> true
-            // If there are seasons episodes divs, it's a series
-            hasSeasonsEpisodes -> true
-            // If title contains series indicators (but not "فيلم")
-            (cleanTitle.contains("الموسم") || 
-             cleanTitle.contains("الحلقة") ||
-             cleanTitle.contains("الجزء")) && 
-             !cleanTitle.contains("فيلم") -> true
-            // If description contains series indicators
-            description?.contains("الموسم") == true || 
-            description?.contains("الحلقة") == true ||
-            description?.contains("مسلسل") == true -> true
-            // Default to movie
-            else -> false
-        }
-        
-        // Get the current episode number if this is an individual episode page
-        val currentEpisodeNum = extractEpisodeNumberFromTitle(cleanTitle)
-        val currentSeasonNum = extractSeasonNumberFromTitle(cleanTitle)
-        
-        return if (isSeries) {
-            // TV Series - need to determine the series title without episode info
-            val seriesTitle = extractSeriesTitle(cleanTitle)
-            
-            // If this is an individual episode page but we found other episodes
-            if (episodes.isNotEmpty()) {
-                newTvSeriesLoadResponse(seriesTitle, url, TvType.Anime, episodes.distinctBy { "${it.season}_${it.episode}" }) {
-                    this.posterUrl = fixUrl(poster)
-                    this.plot = description
-                }
-            } else {
-                // Individual episode treated as a single-episode series
-                newTvSeriesLoadResponse(seriesTitle, url, TvType.Anime, listOf(
-                    newEpisode(url) {
-                        this.name = cleanTitle
-                        this.episode = currentEpisodeNum
-                        this.season = currentSeasonNum
-                    }
-                )) {
-                    this.posterUrl = fixUrl(poster)
-                    this.plot = description
-                }
+        return if (isMovie) {
+            // MOVIE
+            newMovieLoadResponse(title, url, TvType.Movie, url) {
+                this.posterUrl = poster.fixUrl()
+                this.plot = description
             }
         } else {
-            // Movie
-            newMovieLoadResponse(cleanTitle, url, TvType.Movie, url) {
-                this.posterUrl = fixUrl(poster)
+            // TV SERIES
+            // Try to extract episodes from seasons
+            val episodes = mutableListOf<Episode>()
+            
+            if (seasonsTabs.isNotEmpty()) {
+                // Has season tabs - extract from each season
+                seasonsTabs.forEach { seasonTab ->
+                    val seasonId = seasonTab.attr("data-serie")
+                    val seasonNum = seasonId.toIntOrNull() ?: 1
+                    
+                    // Find the corresponding season episodes div
+                    document.selectFirst(".SeasonsEpisodes[data-serie='$seasonId']")?.let { seasonDiv ->
+                        seasonDiv.select("a[href*='watch.php']").forEach { episodeLink ->
+                            val episodeUrl = episodeLink.attr("href").fixUrl()
+                            val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
+                            val episodeTitle = episodeLink.select("span").text().takeIf { it.isNotBlank() } 
+                                ?: "الحلقة $episodeNum"
+                            
+                            if (episodeUrl.isNotBlank()) {
+                                episodes.add(
+                                    newEpisode(episodeUrl) {
+                                        this.name = episodeTitle
+                                        this.episode = episodeNum
+                                        this.season = seasonNum
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            } else if (hasMultipleEpisodes) {
+                // No season tabs but has episodes - treat as single season
+                document.select(".SeasonsEpisodes").forEach { episodeDiv ->
+                    episodeDiv.select("a[href*='watch.php']").forEach { episodeLink ->
+                        val episodeUrl = episodeLink.attr("href").fixUrl()
+                        val episodeNum = episodeLink.select("em").text().toIntOrNull() ?: 0
+                        val episodeTitle = episodeLink.select("span").text().takeIf { it.isNotBlank() } 
+                            ?: "الحلقة $episodeNum"
+                        
+                        if (episodeUrl.isNotBlank()) {
+                            episodes.add(
+                                newEpisode(episodeUrl) {
+                                    this.name = episodeTitle
+                                    this.episode = episodeNum
+                                    this.season = 1
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+            
+            // If no episodes found but it's a series page (individual episode)
+            if (episodes.isEmpty()) {
+                val episodeNum = extractEpisodeNumberFromTitle(title)
+                episodes.add(
+                    newEpisode(url) {
+                        this.name = title
+                        this.episode = episodeNum
+                        this.season = 1
+                    }
+                )
+            }
+            
+            // Clean series title
+            val seriesTitle = cleanSeriesTitle(title)
+            
+            newTvSeriesLoadResponse(seriesTitle, url, TvType.Anime, episodes.distinctBy { "${it.season}_${it.episode}" }) {
+                this.posterUrl = poster.fixUrl()
                 this.plot = description
             }
         }
     }
 
-    // ==================== LOAD LINKS - FIXED VERSION ====================
+    // ==================== LOAD LINKS ====================
 
     override suspend fun loadLinks(
         data: String,
@@ -179,115 +175,33 @@ class Animezid : MainAPI() {
         val document = app.get(data).document
         var foundLinks = false
 
-        // METHOD 1: Extract from server buttons with data-embed (THE CORRECT WAY)
+        // METHOD 1: Extract from server buttons
         document.select("#xservers button[data-embed]").forEach { serverButton ->
             val embedUrl = serverButton.attr("data-embed").trim()
-            val serverName = serverButton.text().trim().ifBlank { "Server" }
-            
             if (embedUrl.isNotBlank()) {
                 foundLinks = true
-                loadExtractor(embedUrl, data, subtitleCallback, callback)
+                loadExtractor(embedUrl.fixUrl(), data, subtitleCallback, callback)
             }
         }
 
-        // METHOD 2: Get the currently loaded iframe in Playerholder (active server)
+        // METHOD 2: Current iframe
         if (!foundLinks) {
             document.selectFirst("#Playerholder iframe[src]")?.let { iframe ->
                 val iframeSrc = iframe.attr("src").trim()
                 if (iframeSrc.isNotBlank() && iframeSrc != "about:blank") {
                     foundLinks = true
-                    loadExtractor(iframeSrc, data, subtitleCallback, callback)
+                    loadExtractor(iframeSrc.fixUrl(), data, subtitleCallback, callback)
                 }
             }
         }
 
-        // METHOD 3: Extract download links (these are file hosting sites)
-        document.select("a.dl.show_dl.api[href]").forEach { downloadLink ->
-            val downloadUrl = downloadLink.attr("href").trim()
-            val qualityText = downloadLink.select("span").firstOrNull()?.text() ?: "Unknown"
-            val host = downloadLink.select("span").getOrNull(1)?.text() ?: "Download"
-            
-            if (downloadUrl.isNotBlank() && downloadUrl.startsWith("http")) {
-                foundLinks = true
-                
-                // For file hosting sites, try to load them with extractors
-                when {
-                    downloadUrl.contains("koramaup.com") ||
-                    downloadUrl.contains("bowfile.com") ||
-                    downloadUrl.contains("file-upload.org") ||
-                    downloadUrl.contains("1fichier.com") ||
-                    downloadUrl.contains("1cloudfile.com") ||
-                    downloadUrl.contains("frdl.io") ||
-                    downloadUrl.contains("lbx.to") -> {
-                        loadExtractor(downloadUrl, data, subtitleCallback, callback)
-                    }
-                    else -> {
-                        // For other download links, try extractor first
-                        loadExtractor(downloadUrl, data, subtitleCallback, callback)
-                    }
-                }
-            }
-        }
-
-        // METHOD 4: Fallback - try the embed.php URL from meta tags
+        // METHOD 3: Download links
         if (!foundLinks) {
-            document.selectFirst("meta[itemprop=embedURL]")?.attr("content")?.let { embedUrl ->
-                if (embedUrl.isNotBlank() && embedUrl.contains("embed.php")) {
+            document.select("a.dl.show_dl.api[href]").forEach { downloadLink ->
+                val downloadUrl = downloadLink.attr("href").trim()
+                if (downloadUrl.isNotBlank()) {
                     foundLinks = true
-                    // Try to extract from embed page
-                    try {
-                        val embedDoc = app.get(embedUrl).document
-                        
-                        // Look for iframes in the embed page
-                        embedDoc.select("iframe[src]").forEach { iframe ->
-                            val iframeSrc = iframe.attr("src")
-                            if (iframeSrc.isNotBlank()) {
-                                loadExtractor(fixUrl(iframeSrc), embedUrl, subtitleCallback, callback)
-                            }
-                        }
-                        
-                        // Check for direct video sources
-                        embedDoc.select("video source[src], source[type^='video/'][src]").forEach { source ->
-                            val videoUrl = source.attr("src")
-                            if (videoUrl.isNotBlank()) {
-                                callback(
-                                    newExtractorLink(
-                                        source = name,
-                                        name = name,
-                                        url = fixUrl(videoUrl),
-                                        type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                    ) {
-                                        this.referer = embedUrl
-                                        this.quality = Qualities.Unknown.value
-                                    }
-                                )
-                            }
-                        }
-                    } catch (e: Exception) {
-                        // If embed page fails, try the embed URL itself
-                        loadExtractor(embedUrl, data, subtitleCallback, callback)
-                    }
-                }
-            }
-        }
-
-        // METHOD 5: Check for direct video sources on the page
-        if (!foundLinks) {
-            document.select("video source[src], source[type^='video/'][src]").forEach { source ->
-                val videoUrl = source.attr("src").trim()
-                if (videoUrl.isNotBlank()) {
-                    foundLinks = true
-                    callback(
-                        newExtractorLink(
-                            source = name,
-                            name = name,
-                            url = fixUrl(videoUrl),
-                            type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = data
-                            this.quality = Qualities.Unknown.value
-                        }
-                    )
+                    loadExtractor(downloadUrl.fixUrl(), data, subtitleCallback, callback)
                 }
             }
         }
@@ -302,106 +216,64 @@ class Animezid : MainAPI() {
             .ifBlank { this.selectFirst(".title")?.text()?.trim() }
             ?: return null
         
-        // Clean the title
-        val cleanTitle = cleanTitleText(rawTitle)
-            .ifBlank { return null }
+        val title = cleanTitleText(rawTitle)
+        if (title.isBlank()) return null
             
         val href = this.attr("href").takeIf { it.isNotBlank() } ?: return null
         
-        // Extract poster from lazy-loaded image
         val poster = this.selectFirst("img.lazy")?.attr("data-src")
-            ?.ifBlank { this.selectFirst("img")?.attr("src") }
+            ?.takeIf { it.isNotBlank() }
+            ?: this.selectFirst("img")?.attr("src")
             ?: ""
         
-        // Determine type based on URL or title
-        val isMovie = when {
-            // Title contains movie indicators
-            cleanTitle.contains("فيلم") || cleanTitle.contains("فلم") -> true
-            // Check ribbon for movie indicators
-            this.select(".ribbon").text().contains("فيلم") ||
-            this.select(".ribbon").text().contains("فلم") ||
-            this.select(".ribbon").text().contains("WEB-DL") ||
-            this.select(".ribbon").text().contains("BluRay") -> true
-            // Title contains series indicators
-            cleanTitle.contains("الحلقة") || 
-            cleanTitle.contains("الموسم") ||
-            cleanTitle.contains("الجزء") -> false
-            // URL contains movie indicators
-            href.contains("/movie/") || href.contains("/movies/") -> true
-            // Default to series (anime)
-            else -> false
-        }
+        // Check if it's a movie
+        val isMovie = title.contains("فيلم") || 
+                     title.contains("فلم") ||
+                     this.select(".ribbon").any { it.text().contains("فيلم") || it.text().contains("فلم") } ||
+                     href.contains("/movie/")
 
         return if (isMovie) {
-            newMovieSearchResponse(cleanTitle, fixUrl(href), TvType.Movie) {
-                this.posterUrl = fixUrl(poster)
+            newMovieSearchResponse(title, href.fixUrl(), TvType.Movie) {
+                this.posterUrl = poster.fixUrl()
             }
         } else {
-            newTvSeriesSearchResponse(cleanTitle, fixUrl(href), TvType.Anime) {
-                this.posterUrl = fixUrl(poster)
+            newTvSeriesSearchResponse(title, href.fixUrl(), TvType.Anime) {
+                this.posterUrl = poster.fixUrl()
             }
         }
     }
 
-    private fun fixUrl(url: String): String {
+    private fun String.fixUrl(): String {
         return when {
-            url.isBlank() -> ""
-            url.startsWith("http") -> url
-            url.startsWith("//") -> "https:$url"
-            url.startsWith("/") -> "$mainUrl$url"
-            else -> "$mainUrl/$url"
+            this.isBlank() -> ""
+            this.startsWith("http") -> this
+            this.startsWith("//") -> "https:$this"
+            this.startsWith("/") -> "$mainUrl$this"
+            else -> "$mainUrl/$this"
         }
     }
 
     private fun cleanTitleText(text: String): String {
         return text
-            // Remove welcome messages
-            .replace("مرحباً في موقع", "")
-            .replace("انمي زد الاصلي", "")
-            .replace("انمي زد الأصل", "")
-            .replace("مرحباً في موقع انمي زد الأصل", "")
-            .replace("مرحباً في موقع انمي زد الاصلي", "")
-            .replace("\\s+".toRegex(), " ") // Replace multiple spaces with single space
+            .replace(Regex("مرحباً في موقع.*"), "")
+            .replace(Regex("انمي زد( الاصلي| الأصل)?"), "")
+            .replace(Regex("\\s+"), " ")
             .trim()
-            .ifBlank { text.trim() } // Return original if cleaned is empty
-    }
-
-    private fun cleanDescriptionText(text: String): String? {
-        val cleaned = text
-            .replace("مرحباً في موقع", "")
-            .replace("انمي زد الاصلي", "")
-            .replace("انمي زد الأصل", "")
-            .replace("مرحباً في موقع انمي زد الأصل", "")
-            .replace("مرحباً في موقع انمي زد الاصلي", "")
-            .trim()
-        
-        return cleaned.ifBlank { null }
     }
 
     private fun extractEpisodeNumberFromTitle(title: String): Int {
-        // Try to extract episode number from title like "الحلقة 1184"
-        val episodeRegex = Regex("الحلقة\\s*(\\d+)")
-        val match = episodeRegex.find(title)
-        return match?.groupValues?.get(1)?.toIntOrNull() ?: 1
+        val regex = Regex("الحلقة\\s*(\\d+)")
+        return regex.find(title)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
     }
 
-    private fun extractSeasonNumberFromTitle(title: String): Int {
-        // Try to extract season number from title like "الجزء 25" or "الموسم 25"
-        val seasonRegex = Regex("(الجزء|الموسم)\\s*(\\d+)")
-        val match = seasonRegex.find(title)
-        return match?.groupValues?.get(2)?.toIntOrNull() ?: 1
-    }
-
-    private fun extractSeriesTitle(title: String): String {
-        // Extract series title by removing episode/season info
+    private fun cleanSeriesTitle(title: String): String {
         return title
-            .replace(Regex("الحلقة\\s*\\d+"), "")
-            .replace(Regex("الجزء\\s*\\d+"), "")
-            .replace(Regex("الموسم\\s*\\d+"), "")
+            .replace(Regex("الحلقة\\s*\\d+.*"), "")
+            .replace(Regex("الموسم\\s*\\d+.*"), "")
+            .replace(Regex("الجزء\\s*\\d+.*"), "")
             .replace("مدبلجة", "")
-            .replace("مدبلج", "")
             .replace("مترجمة", "")
-            .replace("مترجم", "")
+            .replace(Regex("\\s+"), " ")
             .trim()
             .ifBlank { title }
     }
