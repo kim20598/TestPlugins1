@@ -52,15 +52,9 @@ class Animezid : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
         
-        // Extract title - focus on getting clean title without "title" prefix
-        val rawTitle = document.selectFirst("h1")?.text()?.trim()
-            ?: document.selectFirst("h1.post__name")?.text()?.trim()
-            ?: document.selectFirst("meta[property='og:title']")?.attr("content")?.trim()
-            ?: document.selectFirst("meta[name='title']")?.attr("content")?.trim()
-            ?: ""
-        
-        // Clean the title - remove "title:" or similar prefixes
-        val cleanTitle = cleanTitleText(rawTitle)
+        // ===== EXTRACT REAL TITLE =====
+        // The real title is usually in an h1 tag or specific meta tags
+        val cleanTitle = extractRealTitle(document)
             
         // Extract poster
         val poster = document.selectFirst("meta[property='og:image']")?.attr("content")
@@ -68,10 +62,16 @@ class Animezid : MainAPI() {
             ?: document.selectFirst("img[itemprop=image]")?.attr("src")
             ?: ""
             
-        // Extract description
+        // Extract description - clean up welcome messages
         val description = document.selectFirst(".pm-video-description p")?.text()?.trim()
             ?: document.selectFirst("meta[property='og:description']")?.attr("content")?.trim()
             ?: ""
+        
+        val cleanDescription = if (description.contains("مرحباً في موقع انمي زد")) {
+            null
+        } else {
+            description
+        }
         
         // Check for episodes (series)
         val episodes = mutableListOf<Episode>()
@@ -132,13 +132,13 @@ class Animezid : MainAPI() {
             // TV Series
             newTvSeriesLoadResponse(cleanTitle, url, TvType.Anime, episodes.distinctBy { "${it.season}_${it.episode}" }) {
                 this.posterUrl = fixUrl(poster)
-                this.plot = description
+                this.plot = cleanDescription
             }
         } else {
             // Movie
             newMovieLoadResponse(cleanTitle, url, TvType.Movie, url) {
                 this.posterUrl = fixUrl(poster)
-                this.plot = description
+                this.plot = cleanDescription
             }
         }
     }
@@ -162,11 +162,11 @@ class Animezid : MainAPI() {
             
             if (videoUrl.isNotBlank()) {
                 callback(
-                    ExtractorLink(
+                    newExtractorLink(
                         name,
                         name,
                         videoUrl,
-                        "",
+                        data,
                         Qualities.Unknown.value,
                         false
                     )
@@ -179,45 +179,11 @@ class Animezid : MainAPI() {
         document.select("iframe[src]").forEach { iframe ->
             val src = iframe.attr("src").trim()
             if (src.isNotBlank() && src != "about:blank") {
-                // Check if it's a known video hosting service
-                when {
-                    src.contains("youtube") || src.contains("youtu.be") -> {
-                        // YouTube links
-                        callback(
-                            ExtractorLink(
-                                "YouTube",
-                                "YouTube",
-                                src,
-                                "",
-                                Qualities.Unknown.value,
-                                false
-                            )
-                        )
-                        foundLinks = true
-                    }
-                    src.contains("drive.google") -> {
-                        // Google Drive links
-                        callback(
-                            ExtractorLink(
-                                "Google Drive",
-                                "Google Drive",
-                                src,
-                                "",
-                                Qualities.Unknown.value,
-                                false
-                            )
-                        )
-                        foundLinks = true
-                    }
-                    else -> {
-                        // Other embed sources - try to extract
-                        try {
-                            loadExtractor(src, data, subtitleCallback, callback)
-                            foundLinks = true
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-                    }
+                try {
+                    loadExtractor(src, data, subtitleCallback, callback)
+                    foundLinks = true
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
         }
@@ -244,17 +210,19 @@ class Animezid : MainAPI() {
                 try {
                     // For watch.php links, we need to get the actual video page
                     if (href.contains("watch.php")) {
-                        val watchDoc = app.get(fixUrl(href)).document
-                        // Try to extract video from the watch page
+                        val watchUrl = fixUrl(href)
+                        val watchDoc = app.get(watchUrl).document
+                        
+                        // Try all extraction methods on the watch page
                         watchDoc.select("video source[src]").forEach { source ->
                             val videoUrl = source.attr("src")
                             if (videoUrl.isNotBlank()) {
                                 callback(
-                                    ExtractorLink(
+                                    newExtractorLink(
                                         name,
-                                        name,
-                                        videoUrl,
-                                        "",
+                                        "Direct Video",
+                                        fixUrl(videoUrl),
+                                        watchUrl,
                                         Qualities.Unknown.value,
                                         false
                                     )
@@ -262,14 +230,27 @@ class Animezid : MainAPI() {
                                 foundLinks = true
                             }
                         }
+                        
+                        // Check for iframes in watch page
+                        watchDoc.select("iframe[src]").forEach { iframe ->
+                            val src = iframe.attr("src").trim()
+                            if (src.isNotBlank()) {
+                                try {
+                                    loadExtractor(src, watchUrl, subtitleCallback, callback)
+                                    foundLinks = true
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+                            }
+                        }
                     } else {
                         // Direct download link
                         callback(
-                            ExtractorLink(
+                            newExtractorLink(
                                 name,
                                 "Download - $text",
                                 fixUrl(href),
-                                "",
+                                data,
                                 Qualities.Unknown.value,
                                 false
                             )
@@ -331,8 +312,64 @@ class Animezid : MainAPI() {
         }
     }
 
+    private fun extractRealTitle(document: org.jsoup.nodes.Document): String {
+        // Try multiple strategies to get the real title
+        
+        // Strategy 1: Look for specific h1 structures
+        val h1Text = document.selectFirst("h1")?.text()?.trim() ?: ""
+        if (h1Text.isNotBlank() && !h1Text.contains("مرحباً في موقع")) {
+            return cleanTitleText(h1Text)
+        }
+        
+        // Strategy 2: Look for breadcrumb navigation (often contains real title)
+        document.select(".breadcrumb a").lastOrNull()?.let { breadcrumb ->
+            val breadcrumbText = breadcrumb.text().trim()
+            if (breadcrumbText.isNotBlank() && !breadcrumbText.contains("مرحباً")) {
+                return cleanTitleText(breadcrumbText)
+            }
+        }
+        
+        // Strategy 3: Look for meta tags
+        val metaTitle = document.selectFirst("meta[property='og:title']")?.attr("content")?.trim()
+            ?: document.selectFirst("meta[name='title']")?.attr("content")?.trim()
+        
+        if (metaTitle != null && metaTitle.isNotBlank() && !metaTitle.contains("مرحباً في موقع")) {
+            return cleanTitleText(metaTitle)
+        }
+        
+        // Strategy 4: Look for specific content containers
+        document.select(".post__name, .video-title, .movie-title, .entry-title").forEach { element ->
+            val text = element.text().trim()
+            if (text.isNotBlank() && !text.contains("مرحباً في موقع")) {
+                return cleanTitleText(text)
+            }
+        }
+        
+        // Strategy 5: Last resort - get title from URL or use fallback
+        val urlTitle = document.location()
+            ?.substringAfterLast("/")
+            ?.substringBefore("?")
+            ?.replace("-", " ")
+            ?.replace("_", " ")
+            ?.trim()
+            ?: ""
+        
+        return if (urlTitle.isNotBlank()) {
+            cleanTitleText(urlTitle)
+        } else {
+            "Unknown Title"
+        }
+    }
+
     private fun cleanTitleText(text: String): String {
         return text
+            // Remove welcome messages
+            .replace("مرحباً في موقع انمي زد الأصلي", "")
+            .replace("مرحباً في موقع انمي زد الاصلي", "")
+            .replace("مرحباً في موقع انمي زد", "")
+            .replace("انمي زد الأصلي", "")
+            .replace("انمي زد الاصلي", "")
+            .replace("Animezid", "")
             // Remove "title:" prefix and similar
             .replace("^title\\s*[:\\.]\\s*".toRegex(RegexOption.IGNORE_CASE), "")
             .replace("^عنوان\\s*[:\\.]\\s*".toRegex(), "")
