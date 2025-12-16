@@ -166,10 +166,11 @@ class Animezid : MainAPI() {
                         name,
                         name,
                         videoUrl,
-                        data,
-                        Qualities.Unknown.value,
-                        false
-                    )
+                        null
+                    ) {
+                        this.quality = Qualities.Unknown.value
+                        this.isM3u8 = false
+                    }
                 )
                 foundLinks = true
             }
@@ -222,10 +223,11 @@ class Animezid : MainAPI() {
                                         name,
                                         "Direct Video",
                                         fixUrl(videoUrl),
-                                        watchUrl,
-                                        Qualities.Unknown.value,
-                                        false
-                                    )
+                                        null
+                                    ) {
+                                        this.quality = Qualities.Unknown.value
+                                        this.isM3u8 = false
+                                    }
                                 )
                                 foundLinks = true
                             }
@@ -250,10 +252,11 @@ class Animezid : MainAPI() {
                                 name,
                                 "Download - $text",
                                 fixUrl(href),
-                                data,
-                                Qualities.Unknown.value,
-                                false
-                            )
+                                null
+                            ) {
+                                this.quality = Qualities.Unknown.value
+                                this.isM3u8 = false
+                            }
                         )
                         foundLinks = true
                     }
