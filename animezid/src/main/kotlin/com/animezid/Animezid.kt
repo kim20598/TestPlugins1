@@ -53,24 +53,26 @@ class Animezid : MainAPI() {
         val document = app.get(url).document
         
         // Extract title - clean up welcome messages
-        val rawTitle = document.selectFirst("meta[itemprop=name]")?.attr("content")
-            ?: document.selectFirst("h1 span strong")?.text()
+        val rawTitle = document.selectFirst("h1")?.text()
             ?: document.selectFirst("h1.post__name")?.text()
-            ?: document.selectFirst("h1")?.text()
+            ?: document.selectFirst(".video-title")?.text()
+            ?: document.selectFirst(".post__title")?.text()
             ?: "Unknown"
 
         // Clean the title - remove welcome messages and site names
         val cleanTitle = cleanTitleText(rawTitle)
             
-        // Extract poster from meta tags or images
+        // Extract poster
         val poster = document.selectFirst("meta[itemprop=image]")?.attr("content")
             ?: document.selectFirst("meta[itemprop=thumbnailUrl]")?.attr("content")
             ?: document.selectFirst("img.lazy")?.attr("data-src")
+            ?: document.selectFirst(".post__image img")?.attr("src")
             ?: ""
             
-        // Extract description - clean up welcome messages
+        // Extract description
         val description = document.selectFirst(".pm-video-description p.description")?.text()?.trim()
             ?: document.selectFirst("meta[name=description]")?.attr("content")?.trim()
+            ?: document.selectFirst(".post__description")?.text()?.trim()
             ?: ""
         
         val cleanDescription = cleanDescriptionText(description)
@@ -145,7 +147,7 @@ class Animezid : MainAPI() {
             }
         }
         
-        // Better detection for movie vs series
+        // Better detection for movie vs series - FIXED FOR MOVIES
         val isSeries = when {
             // If we found episodes, it's a series
             episodes.isNotEmpty() -> true
@@ -154,18 +156,35 @@ class Animezid : MainAPI() {
             // If there are episodes tabs, it's a series
             document.select(".tab-episodes").isNotEmpty() -> true
             // If title contains series indicators
-            cleanTitle.contains("مسلسل") || 
-            cleanTitle.contains("الموسم") || 
-            cleanTitle.contains("الحلقة") -> true
-            // If description contains series indicators
-            cleanDescription?.contains("مسلسل") == true || 
-            cleanDescription?.contains("الموسم") == true || 
-            cleanDescription?.contains("الحلقة") == true -> true
-            // If URL indicates a movie category
+            rawTitle.contains("مسلسل") || 
+            rawTitle.contains("الموسم") || 
+            rawTitle.contains("الحلقة") ||
+            rawTitle.contains("الموسم") ||
+            rawTitle.contains("الحلقة") -> true
+            // If URL indicates series
+            url.contains("/category.php?cat=series") ||
+            url.contains("/category.php?cat=anime") -> true
+            // If URL indicates a movie category - treat as movie
             url.contains("/category.php?cat=movies") ||
             url.contains("/movie/") -> false
-            // Default to movie if none of the above
-            else -> false
+            // Default - check for single episode (like in your screenshot)
+            else -> {
+                // If there's only one download link or it looks like a movie page
+                val hasDownloadLinks = document.select("a.dl.show_dl.api[href]").isNotEmpty()
+                val hasSingleEpisode = document.select("a[href*='watch.php']").size == 1
+                
+                // If it has download links but no episode structure, it's likely a movie
+                hasDownloadLinks && !hasSingleEpisode
+            }
+        }
+        
+        // For movies, we need to pass the correct URL to loadLinks
+        val loadData = if (isSeries && episodes.isNotEmpty()) {
+            // For series, use the first episode URL for testing
+            episodes.firstOrNull()?.data ?: url
+        } else {
+            // For movies, use the current page URL
+            url
         }
         
         return if (isSeries) {
@@ -176,14 +195,14 @@ class Animezid : MainAPI() {
             }
         } else {
             // Movie
-            newMovieLoadResponse(cleanTitle, url, TvType.Movie, url) {
+            newMovieLoadResponse(cleanTitle, url, TvType.Movie, loadData) {
                 this.posterUrl = fixUrl(poster)
                 this.plot = cleanDescription
             }
         }
     }
 
-    // ==================== LOAD LINKS - FIXED VERSION ====================
+    // ==================== LOAD LINKS - KEEP ORIGINAL WORKING VERSION ====================
 
     override suspend fun loadLinks(
         data: String,
@@ -230,92 +249,44 @@ class Animezid : MainAPI() {
             }
         }
 
-        // METHOD 4: Check for direct video sources on the page
+        // METHOD 4: Fallback - try the embed.php URL from meta tags
         if (!foundLinks) {
-            document.select("video source[src]").forEach { source ->
-                val videoUrl = source.attr("src").trim()
-                if (videoUrl.isNotBlank()) {
+            document.selectFirst("meta[itemprop=embedURL]")?.attr("content")?.let { embedUrl ->
+                if (embedUrl.isNotBlank() && embedUrl.contains("embed.php")) {
                     foundLinks = true
-                    callback(
-                        newExtractorLink(
-                            source = name,
-                            name = name,
-                            url = fixUrl(videoUrl),
-                            type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else null
-                        ) {
-                            this.referer = data
-                            this.quality = Qualities.Unknown.value
-                        }
-                    )
-                }
-            }
-        }
-
-        // METHOD 5: Check for direct video links in the page content
-        if (!foundLinks) {
-            // Look for links that might point to video files
-            document.select("a[href]").forEach { link ->
-                val href = link.attr("href").trim()
-                val text = link.text().trim()
-                
-                // Check if it's a video file link
-                if (href.isNotBlank() && (
-                    href.contains(".mp4") || 
-                    href.contains(".m3u8") || 
-                    href.contains(".mkv") || 
-                    href.contains(".avi") ||
-                    text.contains("تحميل") ||
-                    text.contains("مشاهدة") ||
-                    text.contains("download", ignoreCase = true) ||
-                    text.contains("watch", ignoreCase = true)
-                )) {
+                    // Try to extract from embed page
                     try {
-                        val fullUrl = fixUrl(href)
-                        // Try to extract from this link
-                        loadExtractor(fullUrl, data, subtitleCallback, callback)
-                        foundLinks = true
-                    } catch (e: Exception) {
-                        // If extraction fails, try direct link
-                        if (href.contains(".mp4") || href.contains(".m3u8") || href.contains(".mkv")) {
-                            callback(
-                                newExtractorLink(
-                                    source = name,
-                                    name = "Direct Video",
-                                    url = fixUrl(href),
-                                    type = when {
-                                        href.contains(".m3u8") -> ExtractorLinkType.M3U8
-                                        else -> null
+                        val embedDoc = app.get(embedUrl).document
+                        
+                        // Look for iframes in the embed page
+                        embedDoc.select("iframe[src]").forEach { iframe ->
+                            val iframeSrc = iframe.attr("src")
+                            if (iframeSrc.isNotBlank()) {
+                                loadExtractor(fixUrl(iframeSrc), embedUrl, subtitleCallback, callback)
+                            }
+                        }
+                        
+                        // Check for direct video sources
+                        embedDoc.select("video source[src], source[type^='video/'][src]").forEach { source ->
+                            val videoUrl = source.attr("src")
+                            if (videoUrl.isNotBlank()) {
+                                callback(
+                                    newExtractorLink(
+                                        source = name,
+                                        name = name,
+                                        url = fixUrl(videoUrl),
+                                        type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                    ) {
+                                        this.referer = embedUrl
+                                        this.quality = Qualities.Unknown.value
                                     }
-                                ) {
-                                    this.referer = data
-                                    this.quality = Qualities.Unknown.value
-                                }
-                            )
-                            foundLinks = true
+                                )
+                            }
                         }
+                    } catch (e: Exception) {
+                        // If embed page fails, try the embed URL itself
+                        loadExtractor(embedUrl, data, subtitleCallback, callback)
                     }
-                }
-            }
-        }
-
-        // METHOD 6: Try to get video URL from watch.php pages (for episodes)
-        if (!foundLinks && data.contains("watch.php")) {
-            // This might be an episode page, check for direct video
-            document.select("video source[src]").forEach { source ->
-                val videoUrl = source.attr("src").trim()
-                if (videoUrl.isNotBlank()) {
-                    foundLinks = true
-                    callback(
-                        newExtractorLink(
-                            source = name,
-                            name = name,
-                            url = fixUrl(videoUrl),
-                            type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else null
-                        ) {
-                            this.referer = data
-                            this.quality = Qualities.Unknown.value
-                        }
-                    )
                 }
             }
         }
@@ -385,6 +356,7 @@ class Animezid : MainAPI() {
             .replace("انمي زد الأصلي", "")
             .replace("انمي زد الاصلي", "")
             .replace("Animezid", "")
+            .replace("قبام زوتروبويس", "زوتروبويس") // Example from screenshot
             // Remove "title:" prefix and similar
             .replace("^title\\s*[:\\.]\\s*".toRegex(RegexOption.IGNORE_CASE), "")
             .replace("^عنوان\\s*[:\\.]\\s*".toRegex(), "")
@@ -400,6 +372,7 @@ class Animezid : MainAPI() {
             .replace("\\s*مترجم.*".toRegex(), "")
             .replace("\\s*بالعربية.*".toRegex(), "")
             .replace("\\s*بالمصري.*".toRegex(), "")
+            .replace("\\s*مدبلع.*".toRegex(), "") // From screenshot
             // Clean extra spaces
             .replace("\\s+".toRegex(), " ")
             .trim()
