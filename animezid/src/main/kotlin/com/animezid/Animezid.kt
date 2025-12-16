@@ -155,7 +155,7 @@ class Animezid : MainAPI() {
         // METHOD 1b: Try to extract video ID and construct server URLs dynamically
         if (!foundLinks) {
             // Extract video ID from URL
-            val videoId = extractVideoId(data)
+            val videoId = extractVideoIdFromUrl(data)
             if (videoId != null) {
                 // Try different server patterns for this video
                 val serverPatterns = listOf(
@@ -315,51 +315,30 @@ class Animezid : MainAPI() {
         }
     }
 
-    private fun extractVideoId(url: String): String? {
-        // Try to extract from URL parameters
+    private fun extractVideoIdFromUrl(url: String): String? {
+        // Try to extract from URL parameters - this doesn't need network request
         val vidMatch = Regex("vid=([a-zA-Z0-9]+)").find(url)
         if (vidMatch != null) {
             return vidMatch.groupValues[1]
         }
         
-        // Try to extract from embed URLs in the page
-        val doc = app.get(url).document
-        val embedUrl = doc.selectFirst("meta[itemprop=embedURL]")?.attr("content")
+        // Try to extract from the URL path
+        val pathPatterns = listOf(
+            Regex("/watch/([a-zA-Z0-9]+)"),
+            Regex("/video/([a-zA-Z0-9]+)"),
+            Regex("/e/([a-zA-Z0-9]+)"),
+            Regex("/embed/([a-zA-Z0-9]+)")
+        )
         
-        if (embedUrl != null) {
-            // Extract from embed URL
-            val embedId = Regex("vid=([a-zA-Z0-9]+)").find(embedUrl)?.groupValues?.get(1)
-            if (embedId != null) return embedId
-            
-            // Try other patterns
-            val patterns = listOf(
-                Regex("/([a-zA-Z0-9]+)$"),
-                Regex("#([a-zA-Z0-9]+)$"),
-                Regex("e/([a-zA-Z0-9]+)")
-            )
-            
-            for (pattern in patterns) {
-                val match = pattern.find(embedUrl)
-                if (match != null) return match.groupValues[1]
-            }
+        for (pattern in pathPatterns) {
+            val match = pattern.find(url)
+            if (match != null) return match.groupValues[1]
         }
         
-        // Try to get from server buttons
-        val serverButton = doc.selectFirst("button[data-embed]")
-        if (serverButton != null) {
-            val embedAttr = serverButton.attr("data-embed")
-            // Extract ID from embed URL
-            val idPatterns = listOf(
-                Regex("/([a-zA-Z0-9]+)$"),
-                Regex("#([a-zA-Z0-9]+)$"),
-                Regex("e/([a-zA-Z0-9]+)"),
-                Regex("embed-([a-zA-Z0-9]+)")
-            )
-            
-            for (pattern in idPatterns) {
-                val match = pattern.find(embedAttr)
-                if (match != null) return match.groupValues[1]
-            }
+        // Try to extract from the end of URL
+        val lastPart = url.split("/").lastOrNull()
+        if (lastPart != null && lastPart.matches(Regex("[a-zA-Z0-9]+"))) {
+            return lastPart
         }
         
         return null
