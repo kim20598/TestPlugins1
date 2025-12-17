@@ -147,6 +147,30 @@ class KooraLite : MainAPI() {
             }
         }
 
+         // Extract match info from table
+            val matchTable = document.select("table.table-bordered")
+            if (matchTable.isNotEmpty()) {
+                append("\n📋 بطاقة المباراة:\n")
+
+                // Extract table rows
+                matchTable.select("tr").forEach { row ->
+                    val header = row.select("th").text().trim()
+                    val value = row.select("td").text().trim()
+
+                    if (header.isNotBlank() && value.isNotBlank()) {
+                        when (header) {
+                            "البطولة" -> append("🏆 $header: $value\n")
+                            "اسم القناة" -> append("📺 $header: $value\n")
+                            "تاريخ المباراة" -> append("📅 $header: $value\n")
+                            "توقيت المباراة" -> append("⏰ $header: $value\n")
+                            "المعلق" -> append("🎙️ $header: $value\n")
+                            "نتيجة المباراة" -> append("📊 $header: $value\n")
+                            else -> append("• $header: $value\n")
+                        }
+                    }
+                }
+            }
+  
         return newMovieLoadResponse(title, url, TvType.Movie, actualUrl) {
             this.posterUrl = poster
             this.plot = description.trim()
