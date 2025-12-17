@@ -6,7 +6,7 @@ import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
 class AnimeSuge : MainAPI() {
-    override var mainUrl = "https://animesuge.bz"
+    override var mainUrl = "https://animesuge.to"
     override var name = "AnimeSuge"
     override val hasMainPage = true
     override var lang = "en"
@@ -43,7 +43,7 @@ class AnimeSuge : MainAPI() {
     ): HomePageResponse {
         try {
             val url = request.data + if (page > 1) "?page=$page" else ""
-            val document = app.get(url, headers = getHeaders()).document
+            val document = app.get(url).document
             
             val home = document.select(".item, .anime-card, .card, .anime-poster, .poster, article")
                 .mapNotNull { it.toSearchResult() }
@@ -57,7 +57,7 @@ class AnimeSuge : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         return try {
             val encodedQuery = URLEncoder.encode(query, "UTF-8")
-            val document = app.get("$mainUrl/filter?keyword=$encodedQuery", headers = getHeaders()).document
+            val document = app.get("$mainUrl/filter?keyword=$encodedQuery").document
             
             document.select(".item, .anime-card, .card, .anime-poster, .poster, article")
                 .mapNotNull { it.toSearchResult() }
@@ -69,15 +69,12 @@ class AnimeSuge : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         return try {
-            val document = app.get(url, headers = getHeaders()).document
+            val document = app.get(url).document
             
             val title = document.selectFirst("h1.title, h1, .title")?.text()?.trim() ?: "Unknown Title"
             val poster = document.selectFirst(".poster img, [itemprop=image], .cover img")?.attr("src")
                 ?.let { if (it.startsWith("http")) it else "$mainUrl$it" }
             val plot = document.selectFirst(".description, .plot, .summary")?.text()?.trim()
-            
-            // Extract anime ID from the page
-            val animeId = extractAnimeId(document, url)
             
             // Check if it's a movie
             val typeText = document.selectFirst(".meta div:contains(Type) + span")?.text()?.trim()
@@ -86,29 +83,54 @@ class AnimeSuge : MainAPI() {
             
             val episodes = mutableListOf<Episode>()
             
-            if (!isMovie && animeId != null) {
-                // Get episode count
-                val episodeCount = getEpisodeCount(document)
+            if (!isMovie) {
+                // Get episode count from meta
+                val episodeCountText = document.selectFirst(".meta div:contains(Episodes:) + span")?.text()
+                val episodeCount = episodeCountText?.toIntOrNull() ?: 0
                 
-                if (episodeCount > 0) {
-                    // Create episodes with anime ID and episode number as data
-                    for (i in 1..episodeCount) {
-                        val episodeData = "$animeId|$i"
-                        
-                        episodes.add(
-                            newEpisode(episodeData) {
-                                name = "Episode $i"
-                                this.episode = i
-                            }
-                        )
+                // Also check for dub/sub counts
+                val subCount = document.selectFirst(".dub-sub-total .sub")?.text()?.toIntOrNull() ?: 0
+                val dubCount = document.selectFirst(".dub-sub-total .dub")?.text()?.toIntOrNull() ?: 0
+                val totalCount = document.selectFirst(".dub-sub-total .total")?.text()?.toIntOrNull() ?: 0
+                
+                val finalEpisodeCount = maxOf(episodeCount, subCount, dubCount, totalCount)
+                
+                if (finalEpisodeCount > 0) {
+                    // Try to extract anime ID from the page
+                    val animeId = extractAnimeId(document, url)
+                    
+                    if (animeId != null) {
+                        // Create episodes with anime ID as data
+                        for (i in 1..finalEpisodeCount) {
+                            val episodeData = "$animeId|$i"
+                            
+                            episodes.add(
+                                newEpisode(episodeData) {
+                                    name = "Episode $i"
+                                    this.episode = i
+                                }
+                            )
+                        }
+                    } else {
+                        // Fallback: generate episode URLs based on pattern
+                        val baseUrl = url.substringBeforeLast("/ep-").substringBeforeLast("/")
+                        for (i in 1..finalEpisodeCount) {
+                            val episodeUrl = "$baseUrl/ep-$i"
+                            episodes.add(
+                                newEpisode(episodeUrl) {
+                                    name = "Episode $i"
+                                    this.episode = i
+                                }
+                            )
+                        }
                     }
                 }
             }
             
             if (isMovie || episodes.isEmpty()) {
-                // For movies, use anime ID or URL as data
-                val movieData = animeId ?: url
-                newMovieLoadResponse(title, movieData, TvType.AnimeMovie, url) {
+                // For movies, try to extract movie ID
+                val movieId = extractAnimeId(document, url) ?: url
+                newMovieLoadResponse(title, movieId, TvType.AnimeMovie, url) {
                     this.posterUrl = poster
                     this.plot = plot
                 }
@@ -133,37 +155,46 @@ class AnimeSuge : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            // data format: "animeId|episodeNumber" for series, or "animeId/url" for movies
+            // Check if data contains anime ID and episode number
             if (data.contains("|")) {
-                // Series episode
                 val parts = data.split("|")
                 if (parts.size >= 2) {
                     val animeId = parts[0]
                     val episodeNum = parts[1].toIntOrNull() ?: 1
                     
-                    // Get episode servers via AJAX
-                    return getEpisodeServers(animeId, episodeNum, subtitleCallback, callback)
+                    // Method 1: Try to get episode servers via AJAX
+                    if (tryGetEpisodeViaAjax(animeId, episodeNum, subtitleCallback, callback)) {
+                        return true
+                    }
+                    
+                    // Method 2: Try direct episode page
+                    if (tryDirectEpisodePage(animeId, episodeNum, subtitleCallback, callback)) {
+                        return true
+                    }
                 }
-            } else {
-                // Movie - try to get direct movie servers
-                val animeId = data
-                return getMovieServers(animeId, subtitleCallback, callback)
             }
             
-            false
+            // Method 3: Try to extract from scripts on the page
+            if (tryExtractFromScripts(data, subtitleCallback, callback)) {
+                return true
+            }
+            
+            // Method 4: Try iframe (fallback)
+            tryIframeFallback(data, subtitleCallback, callback)
+            
         } catch (e: Exception) {
             false
         }
     }
-
-    private suspend fun getEpisodeServers(
+    
+    private suspend fun tryGetEpisodeViaAjax(
         animeId: String,
         episodeNum: Int,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        try {
-            // First get the episode ID from the anime ID
+        return try {
+            // Try to get episode list first
             val episodeListUrl = "$mainUrl/ajax/v2/episode/list/$animeId"
             val episodeListResponse = app.get(episodeListUrl, headers = mapOf(
                 "X-Requested-With" to "XMLHttpRequest",
@@ -172,12 +203,12 @@ class AnimeSuge : MainAPI() {
             
             if (episodeListResponse.isSuccessful) {
                 val episodeDoc = episodeListResponse.document
-                // Find the specific episode element
-                val episodeElement = episodeDoc.select("a[data-number=\"$episodeNum\"], a[data-episode=\"$episodeNum\"], li[data-number=\"$episodeNum\"]").first()
+                // Find the specific episode
+                val episodeElement = episodeDoc.select("a[data-number=\"$episodeNum\"], a[data-episode=\"$episodeNum\"]").first()
                 val episodeId = episodeElement?.attr("data-id") ?: episodeElement?.attr("id")?.removePrefix("episode-")
                 
                 if (episodeId != null) {
-                    // Now get servers for this episode
+                    // Get servers for this episode
                     val serversUrl = "$mainUrl/ajax/v2/episode/servers?episodeId=$episodeId"
                     val serversResponse = app.get(serversUrl, headers = mapOf(
                         "X-Requested-With" to "XMLHttpRequest",
@@ -186,208 +217,198 @@ class AnimeSuge : MainAPI() {
                     
                     if (serversResponse.isSuccessful) {
                         val serversDoc = serversResponse.document
-                        return extractAndLoadServers(serversDoc, subtitleCallback, callback)
+                        // Look for server elements with data-link-id
+                        val serverElements = serversDoc.select(".server[data-link-id], [data-link-id]")
+                        
+                        for (server in serverElements) {
+                            val dataLinkId = server.attr("data-link-id")
+                            if (dataLinkId.isNotBlank()) {
+                                // Determine if this is dub or sub
+                                val serverText = server.text().lowercase()
+                                val isDub = serverText.contains("dub")
+                                val language = if (isDub) "dub" else "sub"
+                                
+                                // Try different server patterns
+                                val serverPatterns = listOf("s-1", "s-2", "s-3", "s-4")
+                                for (serverNum in serverPatterns) {
+                                    val megaUrl = "https://megaplay.buzz/stream/$serverNum/$dataLinkId/$language?autostart=true"
+                                    if (loadExtractor(megaUrl, subtitleCallback, callback)) {
+                                        return true
+                                    }
+                                    
+                                    // Also try without language
+                                    val megaUrlNoLang = "https://megaplay.buzz/stream/$serverNum/$dataLinkId?autostart=true"
+                                    if (loadExtractor(megaUrlNoLang, subtitleCallback, callback)) {
+                                        return true
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
+            false
         } catch (e: Exception) {
-            // Try alternative method
+            false
         }
-        
-        // Alternative: Try to find episode ID directly from page
-        return tryDirectEpisodeExtraction(animeId, episodeNum, subtitleCallback, callback)
     }
-
-    private suspend fun getMovieServers(
-        animeId: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        try {
-            // For movies, the anime ID might be the movie ID
-            val movieUrl = "$mainUrl/ajax/movie/episodes/$animeId"
-            val response = app.get(movieUrl, headers = mapOf(
-                "X-Requested-With" to "XMLHttpRequest",
-                "Referer" to mainUrl
-            ))
-            
-            if (response.isSuccessful) {
-                val doc = response.document
-                return extractAndLoadServers(doc, subtitleCallback, callback)
-            }
-        } catch (e: Exception) {
-            // Try alternative
-        }
-        
-        // Try direct MegaPlay URL
-        return tryDirectMegaPlayUrl(animeId, null, subtitleCallback, callback)
-    }
-
-    private suspend fun extractAndLoadServers(
-        doc: org.jsoup.nodes.Document,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        // Look for server elements with data-link-id
-        val serverElements = doc.select(".server[data-link-id], [data-link-id], .ps_-block.episode-sub[data-id], .ps_-block.episode-dub[data-id]")
-        
-        for (server in serverElements) {
-            val dataLinkId = server.attr("data-link-id").takeIf { it.isNotBlank() }
-                ?: server.attr("data-id").takeIf { it.isNotBlank() }
-            
-            if (dataLinkId != null) {
-                // Determine if this is dub or sub
-                val serverText = server.text().lowercase()
-                val serverClass = server.attr("class").lowercase()
-                val isDub = serverText.contains("dub") || serverClass.contains("dub")
-                
-                // Try loading with this ID
-                if (tryDirectMegaPlayUrl(dataLinkId, if (isDub) "dub" else "sub", subtitleCallback, callback)) {
-                    return true
-                }
-            }
-        }
-        
-        // Also look for iframe src
-        val iframe = doc.selectFirst("iframe[src]")
-        val iframeSrc = iframe?.attr("src")?.takeIf { it.isNotBlank() }
-        
-        if (iframeSrc != null && loadExtractor(iframeSrc, subtitleCallback, callback)) {
-            return true
-        }
-        
-        return false
-    }
-
-    private suspend fun tryDirectEpisodeExtraction(
+    
+    private suspend fun tryDirectEpisodePage(
         animeId: String,
         episodeNum: Int,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Try to load the anime page and find the episode directly
-        val animeUrl = "$mainUrl/anime/$animeId"
-        val document = app.get(animeUrl, headers = getHeaders()).document
-        
-        // Look for episode elements
-        val episodeElement = document.select("a[href*=\"$episodeNum\"], [data-episode=\"$episodeNum\"], [data-number=\"$episodeNum\"]").first()
-        val episodeLink = episodeElement?.attr("href")?.takeIf { it.isNotBlank() }
-            ?: episodeElement?.attr("data-url")
-        
-        if (episodeLink != null) {
-            // Try to load the episode page
-            val epUrl = if (episodeLink.startsWith("http")) episodeLink else "$mainUrl$episodeLink"
-            val epDoc = app.get(epUrl, headers = getHeaders()).document
+        return try {
+            // Try to access the episode page directly
+            val episodeUrl = "$mainUrl/watch/$animeId-episode-$episodeNum"
+            val document = app.get(episodeUrl).document
             
-            // Look for video sources
-            val videoScript = epDoc.select("script:containsData(video), script:containsData(sources), script:containsData(file)").first()
-            if (videoScript != null) {
-                val scriptText = videoScript.html()
+            // Look for video sources in scripts
+            val scripts = document.select("script")
+            for (script in scripts) {
+                val scriptText = script.html()
                 
-                // Try to extract MegaPlay URL
-                val megaPlayPattern = Regex("""(https?://[^\s'"]*megaplay[^\s'"]*)""")
-                val megaPlayMatch = megaPlayPattern.find(scriptText)
-                if (megaPlayMatch != null) {
-                    val megaPlayUrl = megaPlayMatch.groupValues[1]
-                    return loadExtractor(megaPlayUrl, subtitleCallback, callback)
-                }
-                
-                // Try to extract direct video URL
-                val videoPattern = Regex("""(https?://[^\s'"]*\.(m3u8|mp4)[^\s'"]*)""")
-                val videoMatch = videoPattern.find(scriptText)
-                if (videoMatch != null) {
-                    val videoUrl = videoMatch.groupValues[1]
-                    callback(ExtractorLink(
-                        name,
-                        name,
-                        videoUrl,
-                        mainUrl,
-                        Qualities.Unknown.value,
-                        isM3u8 = videoUrl.contains(".m3u8")
-                    ))
-                    return true
+                // Look for episode ID
+                val epIdPattern = Regex("""episodeId['"]?\s*:\s*['"]?(\d+)['"]?""")
+                val epIdMatch = epIdPattern.find(scriptText)
+                if (epIdMatch != null) {
+                    val episodeId = epIdMatch.groupValues[1]
+                    
+                    // Try different servers
+                    val serverPatterns = listOf("s-1", "s-2", "s-3", "s-4")
+                    val languages = listOf("sub", "dub")
+                    
+                    for (serverNum in serverPatterns) {
+                        for (language in languages) {
+                            val megaUrl = "https://megaplay.buzz/stream/$serverNum/$episodeId/$language?autostart=true"
+                            if (loadExtractor(megaUrl, subtitleCallback, callback)) {
+                                return true
+                            }
+                        }
+                    }
                 }
             }
+            
+            // Look for iframe
+            val iframe = document.selectFirst("iframe[src]")
+            val iframeSrc = iframe?.attr("src")?.takeIf { it.isNotBlank() }
+                ?.let { if (it.startsWith("http")) it else "https:$it" }
+            
+            if (iframeSrc != null && loadExtractor(iframeSrc, subtitleCallback, callback)) {
+                return true
+            }
+            
+            false
+        } catch (e: Exception) {
+            false
         }
-        
-        return false
     }
-
-    private suspend fun tryDirectMegaPlayUrl(
-        id: String,
-        language: String?,
+    
+    private suspend fun tryExtractFromScripts(
+        data: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Try different server patterns
-        val serverPatterns = listOf("s-1", "s-2", "s-3", "s-4")
-        
-        for (serverNum in serverPatterns) {
-            val megaPlayUrl = if (language != null) {
-                "https://megaplay.buzz/stream/$serverNum/$id/$language?autostart=true"
-            } else {
-                "https://megaplay.buzz/stream/$serverNum/$id?autostart=true"
+        return try {
+            // If data is a URL, try to extract from it
+            if (data.startsWith("http")) {
+                val document = app.get(data).document
+                
+                // Look for scripts with video data
+                val scripts = document.select("script")
+                for (script in scripts) {
+                    val scriptText = script.html()
+                    
+                    // Look for various patterns
+                    val patterns = listOf(
+                        Regex("""['"]data-link-id['"]\s*:\s*['"]([^'"]+)['"]"""),
+                        Regex("""episodeId['"]?\s*:\s*['"]?(\d+)['"]?"""),
+                        Regex("""['"]id['"]\s*:\s*['"]?(\d+)['"]?""")
+                    )
+                    
+                    for (pattern in patterns) {
+                        val match = pattern.find(scriptText)
+                        if (match != null) {
+                            val id = match.groupValues[1]
+                            
+                            // Try different servers
+                            val serverPatterns = listOf("s-1", "s-2", "s-3", "s-4")
+                            val languages = listOf("sub", "dub")
+                            
+                            for (serverNum in serverPatterns) {
+                                for (language in languages) {
+                                    val megaUrl = "https://megaplay.buzz/stream/$serverNum/$id/$language?autostart=true"
+                                    if (loadExtractor(megaUrl, subtitleCallback, callback)) {
+                                        return true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            
-            if (loadExtractor(megaPlayUrl, subtitleCallback, callback)) {
-                return true
-            }
+            false
+        } catch (e: Exception) {
+            false
         }
-        
-        return false
     }
-
+    
+    private suspend fun tryIframeFallback(
+        data: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        return try {
+            // Only try if data is a URL
+            if (data.startsWith("http")) {
+                val document = app.get(data).document
+                
+                // Look for iframe
+                val iframe = document.selectFirst("iframe[src]")
+                val iframeSrc = iframe?.attr("src")?.takeIf { it.isNotBlank() }
+                    ?.let { if (it.startsWith("http")) it else "https:$it" }
+                
+                if (iframeSrc != null && loadExtractor(iframeSrc, subtitleCallback, callback)) {
+                    return true
+                }
+            }
+            false
+        } catch (e: Exception) {
+            false
+        }
+    }
+    
     private fun extractAnimeId(document: org.jsoup.nodes.Document, url: String): String? {
         // Try multiple methods to extract anime ID
         
-        // Method 1: From input field
-        val inputId = document.selectFirst("input[name=id]")?.attr("value")
-        if (inputId != null && inputId.isNotBlank()) return inputId
-        
-        // Method 2: From data attributes
-        val dataId = document.selectFirst("[data-id]")?.attr("data-id")
-        if (dataId != null && dataId.isNotBlank()) return dataId
-        
-        // Method 3: From URL
-        val urlParts = url.removePrefix(mainUrl).split("/")
-        for (part in urlParts) {
-            if (part.isNotBlank() && !part.contains("http") && !part.contains("www") && 
-                !part.matches(Regex("^[a-zA-Z-]+$"))) {
-                return part
+        // Method 1: From meta tag
+        val metaUrl = document.selectFirst("meta[property=og:url]")?.attr("content")
+        if (metaUrl != null) {
+            val idFromMeta = metaUrl.substringAfterLast("/").substringBefore("?")
+            if (idFromMeta.isNotBlank() && idFromMeta != "watch") {
+                return idFromMeta
             }
         }
         
-        // Method 4: Last resort - extract from URL path
-        return url.substringAfterLast("/").substringBefore("?").takeIf { it.isNotBlank() && !it.contains(".") }
+        // Method 2: From URL path
+        val urlPath = url.removePrefix(mainUrl)
+        if (urlPath.isNotBlank()) {
+            val segments = urlPath.split("/")
+            for (segment in segments) {
+                if (segment.isNotBlank() && !segment.contains("?") && 
+                    !listOf("anime", "watch", "movie", "tv", "ova").contains(segment.lowercase())) {
+                    return segment
+                }
+            }
+        }
+        
+        // Method 3: Try to find ID in the page
+        val idInput = document.selectFirst("input[name=id]")?.attr("value")
+        if (idInput != null && idInput.isNotBlank()) {
+            return idInput
+        }
+        
+        return null
     }
-
-    private fun getEpisodeCount(document: org.jsoup.nodes.Document): Int {
-        // Try multiple methods to get episode count
-        
-        // Method 1: From meta
-        val metaEpisodes = document.selectFirst(".meta div:contains(Episodes:) + span")?.text()?.toIntOrNull() ?: 0
-        if (metaEpisodes > 0) return metaEpisodes
-        
-        // Method 2: From dub/sub total
-        val subCount = document.selectFirst(".dub-sub-total .sub")?.text()?.toIntOrNull() ?: 0
-        val dubCount = document.selectFirst(".dub-sub-total .dub")?.text()?.toIntOrNull() ?: 0
-        val totalCount = document.selectFirst(".dub-sub-total .total")?.text()?.toIntOrNull() ?: 0
-        
-        return maxOf(subCount, dubCount, totalCount, 0)
-    }
-
-    private fun getHeaders(): Map<String, String> = mapOf(
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language" to "en-US,en;q=0.5",
-        "Accept-Encoding" to "gzip, deflate, br",
-        "DNT" to "1",
-        "Connection" to "keep-alive",
-        "Upgrade-Insecure-Requests" to "1",
-        "Sec-Fetch-Dest" to "document",
-        "Sec-Fetch-Mode" to "navigate",
-        "Sec-Fetch-Site" to "none",
-        "Sec-Fetch-User" to "?1",
-        "Cache-Control" to "max-age=0",
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    )
 }
