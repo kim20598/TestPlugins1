@@ -157,9 +157,9 @@ class AnimeSuge : MainAPI() {
         }
     }
 
-    override suspend fun load(loadUrl: String): LoadResponse {
+    override suspend fun load(url: String): LoadResponse {
         return try {
-            val document = app.get(loadUrl).document
+            val document = app.get(url).document
             
             val title = document.selectFirst("h1.title, h1, .title")?.text()?.trim() 
                 ?: "Unknown Title"
@@ -170,82 +170,25 @@ class AnimeSuge : MainAPI() {
             
             val plot = document.selectFirst(".description, .plot")?.text()?.trim()
             
-            // NEW: COMPLETELY REDESIGNED EPISODE EXTRACTION
-            val episodes = extractEpisodes(document, loadUrl)
+            // SIMPLE EPISODE EXTRACTION - BACK TO ORIGINAL
+            val episodes = mutableListOf<Episode>()
             
-            // Check if it's explicitly a movie
-            val typeElement = document.selectFirst(".meta div:contains(Type) + span, .info:contains(Type), .meta-item:contains(Type)")
-            val typeText = typeElement?.text()?.lowercase() ?: ""
-            val isExplicitlyMovie = typeText.contains("movie") || loadUrl.contains("/movie/")
-            
-            // Check for series indicators
-            val hasSeasons = document.select("#ani-seasons, .media-season-head, .season-selector").isNotEmpty()
-            val hasEpisodeRange = document.select(".range[data-range], .range-view, .episode-range").isNotEmpty()
-            
-            // Determine type
-            val isMovie = when {
-                isExplicitlyMovie -> true
-                episodes.isEmpty() && !hasSeasons && !hasEpisodeRange -> true
-                episodes.size == 1 && !hasSeasons && !hasEpisodeRange && !title.contains("Episode") -> true
-                else -> false
-            }
-            
-            if (isMovie) {
-                // For movies, use the first episode URL or the page itself
-                val dataUrl = episodes.firstOrNull()?.url ?: loadUrl
-                newMovieLoadResponse(title, loadUrl, TvType.AnimeMovie, dataUrl) {
-                    this.posterUrl = poster
-                    this.plot = plot
-                }
-            } else {
-                // For series, sort episodes by number
-                val sortedEpisodes = episodes.sortedBy { it.episode ?: 0 }
-                newTvSeriesLoadResponse(title, loadUrl, TvType.Anime, sortedEpisodes) {
-                    this.posterUrl = poster
-                    this.plot = plot
-                }
-            }
-            
-        } catch (e: Exception) {
-            // Default to series on error
-            newTvSeriesLoadResponse("Error Loading", loadUrl, TvType.Anime, emptyList()) {
-                this.plot = "Failed to load anime details. Please try again."
-            }
-        }
-    }
-    
-    // NEW: Separate function for episode extraction
-    private fun extractEpisodes(document: org.jsoup.nodes.Document, baseUrl: String): List<Episode> {
-        val episodes = mutableListOf<Episode>()
-        
-        // Method 1: Look for episode range container
-        val episodeContainers = listOf(
-            "#media-episode",
-            ".episode-list",
-            ".episodes-list", 
-            ".episode-range",
-            ".range-wrap",
-            "#ani-episodes"
-        )
-        
-        for (containerSelector in episodeContainers) {
-            val container = document.selectFirst(containerSelector)
-            if (container != null) {
-                // Look for episode links within the container
-                val episodeLinks = container.select("a[href*='/watch/'], a[href*='/ep-'], a.episode-item, .episode a")
+            val rangeContainer = document.selectFirst(".range, #media-episode .range, .range-wrap .range")
+            if (rangeContainer != null) {
+                val episodeLinks = rangeContainer.select("a[href*='/watch/'], a[href*='/ep-']")
                 for (ep in episodeLinks) {
                     try {
                         val episodeUrl = ep.attr("href").takeIf { it.isNotBlank() }?.let { href ->
                             if (href.startsWith("http")) href else "$mainUrl$href"
                         } ?: continue
                         
-                        // Extract episode number using multiple methods
-                        val episodeNumber = extractEpisodeNumber(ep, episodeUrl)
-                        if (episodeNumber == null) continue
+                        val episodeNumber = ep.attr("data-slug").toIntOrNull()
+                            ?: ep.text().trim().toIntOrNull()
+                            ?: Regex("""ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull()
+                            ?: continue
                         
                         val episodeName = ep.attr("title").takeIf { it.isNotBlank() }
                             ?: ep.attr("data-num").takeIf { it.isNotBlank() }
-                            ?: ep.selectFirst(".episode-name, .name")?.text()?.trim()
                             ?: "Episode $episodeNumber"
                         
                         episodes.add(
@@ -258,118 +201,31 @@ class AnimeSuge : MainAPI() {
                         // Skip episode errors
                     }
                 }
-                
-                // Also check for button elements with data attributes
-                val episodeButtons = container.select("button[data-episode], [data-episode-id]")
-                for (button in episodeButtons) {
-                    try {
-                        val episodeId = button.attr("data-episode") ?: button.attr("data-episode-id")
-                        if (episodeId.isNotBlank()) {
-                            val episodeUrl = "$baseUrl?ep=$episodeId"
-                            val episodeNumber = button.text().trim().toIntOrNull()
-                                ?: episodeId.toIntOrNull()
-                                ?: continue
-                            
-                            val episodeName = button.attr("title").takeIf { it.isNotBlank() }
-                                ?: "Episode $episodeNumber"
-                            
-                            episodes.add(
-                                newEpisode(episodeUrl) {
-                                    name = episodeName
-                                    this.episode = episodeNumber
-                                }
-                            )
-                        }
-                    } catch (e: Exception) {
-                        // Skip button errors
-                    }
-                }
-                
-                if (episodes.isNotEmpty()) break
             }
-        }
-        
-        // Method 2: Look for episode grid/list
-        if (episodes.isEmpty()) {
-            val episodeGrids = document.select(".episode-grid, .grid-episodes, .episodes-grid")
-            for (grid in episodeGrids) {
-                val items = grid.select(".episode-item, .grid-item, .item")
-                for (item in items) {
-                    try {
-                        val link = item.selectFirst("a[href*='/watch/'], a[href*='/ep-']")
-                        val episodeUrl = link?.attr("href")?.takeIf { it.isNotBlank() }?.let { href ->
-                            if (href.startsWith("http")) href else "$mainUrl$href"
-                        } ?: continue
-                        
-                        val episodeNumber = extractEpisodeNumber(item, episodeUrl) ?: continue
-                        
-                        val episodeName = item.selectFirst(".episode-title, .title, .name")?.text()?.trim()
-                            ?: "Episode $episodeNumber"
-                        
-                        episodes.add(
-                            newEpisode(episodeUrl) {
-                                name = episodeName
-                                this.episode = episodeNumber
-                            }
-                        )
-                    } catch (e: Exception) {
-                        // Skip item errors
-                    }
+            
+            // Check if it's a movie
+            val typeElement = document.selectFirst(".meta div:contains(Type) + span")
+            val isMovie = typeElement?.text()?.contains("movie", true) == true || 
+                         url.contains("/movie/") || 
+                         episodes.isEmpty()
+            
+            if (isMovie) {
+                newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
+                    this.posterUrl = poster
+                    this.plot = plot
                 }
-                if (episodes.isNotEmpty()) break
-            }
-        }
-        
-        // Method 3: Look for all episode links on the page
-        if (episodes.isEmpty()) {
-            val allEpisodeLinks = document.select("a[href*='/watch/'][href*='/ep-'], a[href*='/watch/'][href*='?ep=']")
-            for (link in allEpisodeLinks) {
-                try {
-                    val episodeUrl = link.attr("href").takeIf { it.isNotBlank() }?.let { href ->
-                        if (href.startsWith("http")) href else "$mainUrl$href"
-                    } ?: continue
-                    
-                    // Extract episode number from URL
-                    val episodeNumber = when {
-                        episodeUrl.contains("ep-") -> {
-                            Regex("ep-(\\d+)").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull()
-                        }
-                        episodeUrl.contains("?ep=") -> {
-                            Regex("[?&]ep=(\\d+)").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull()
-                        }
-                        else -> null
-                    } ?: continue
-                    
-                    val episodeName = link.text().trim().takeIf { it.isNotBlank() }
-                        ?: link.attr("title").takeIf { it.isNotBlank() }
-                        ?: "Episode $episodeNumber"
-                    
-                    episodes.add(
-                        newEpisode(episodeUrl) {
-                            name = episodeName
-                            this.episode = episodeNumber
-                        }
-                    )
-                } catch (e: Exception) {
-                    // Skip link errors
+            } else {
+                newTvSeriesLoadResponse(title, url, TvType.Anime, episodes.sortedBy { it.episode }) {
+                    this.posterUrl = poster
+                    this.plot = plot
                 }
             }
-        }
-        
-        return episodes.distinctBy { it.episode }
-    }
-    
-    // Helper function to extract episode number
-    private fun extractEpisodeNumber(element: org.jsoup.nodes.Element, url: String): Int? {
-        return when {
-            element.attr("data-slug").isNotBlank() -> element.attr("data-slug").toIntOrNull()
-            element.attr("data-episode").isNotBlank() -> element.attr("data-episode").toIntOrNull()
-            element.text().trim().matches(Regex("\\d+")) -> element.text().trim().toIntOrNull()
-            element.selectFirst(".episode-num, .num")?.text()?.matches(Regex("\\d+")) == true -> 
-                element.selectFirst(".episode-num, .num")?.text()?.toIntOrNull()
-            url.contains("ep-") -> Regex("ep-(\\d+)").find(url)?.groupValues?.get(1)?.toIntOrNull()
-            url.contains("?ep=") -> Regex("[?&]ep=(\\d+)").find(url)?.groupValues?.get(1)?.toIntOrNull()
-            else -> null
+            
+        } catch (e: Exception) {
+            // Return a basic error response
+            newMovieLoadResponse("Error", url, TvType.AnimeMovie, url) {
+                this.plot = "Failed to load: ${e.message}"
+            }
         }
     }
 
@@ -383,21 +239,14 @@ class AnimeSuge : MainAPI() {
             val document = app.get(data).document
             var foundLinks = false
             
-            // Try API call first
-            val servers = document.select(".server[data-link-id]")
-            for (server in servers) {
-                val dataLinkId = server.attr("data-link-id")
-                if (dataLinkId.isNotBlank()) {
-                    try {
-                        val videoUrl = fetchVideoUrlFromApi(dataLinkId)
-                        if (videoUrl != null && videoUrl.isNotBlank()) {
-                            if (loadExtractor(videoUrl, subtitleCallback, callback)) {
-                                foundLinks = true
-                                break
-                            }
-                        }
-                    } catch (e: Exception) {
-                        // If API fails, fall back to old Megaplay method
+            // Method 1: Look for server wrapper
+            val serverWrapper = document.selectFirst(".server-wrapper")
+            if (serverWrapper != null) {
+                val servers = serverWrapper.select(".server[data-link-id]")
+                for (server in servers) {
+                    val dataLinkId = server.attr("data-link-id")
+                    if (dataLinkId.isNotBlank()) {
+                        // Try Megaplay URL pattern
                         val megaUrl = "https://megaplay.buzz/stream/s-1/$dataLinkId?autostart=true"
                         if (loadExtractor(megaUrl, subtitleCallback, callback)) {
                             foundLinks = true
@@ -407,6 +256,7 @@ class AnimeSuge : MainAPI() {
                 }
             }
             
+            // Method 2: Try iframe
             if (!foundLinks) {
                 val iframe = document.selectFirst("iframe[src]")
                 val iframeSrc = iframe?.attr("src")?.takeIf { it.isNotBlank() }?.let { src ->
@@ -417,10 +267,27 @@ class AnimeSuge : MainAPI() {
                 }
             }
             
+            // Method 3: Try direct server elements
+            if (!foundLinks) {
+                val servers = document.select(".server[data-link-id]")
+                for (server in servers) {
+                    val dataLinkId = server.attr("data-link-id")
+                    if (dataLinkId.isNotBlank()) {
+                        val megaUrl = "https://megaplay.buzz/stream/s-1/$dataLinkId?autostart=true"
+                        if (loadExtractor(megaUrl, subtitleCallback, callback)) {
+                            foundLinks = true
+                            break
+                        }
+                    }
+                }
+            }
+            
+            // Method 4: Look for video in scripts
             if (!foundLinks) {
                 val scripts = document.select("script")
                 for (script in scripts) {
                     val scriptText = script.html()
+                    // Look for Megaplay pattern
                     val megaPattern = Regex("""megaplay\.buzz/stream/s-1/([^"'\s?]+)""")
                     val match = megaPattern.find(scriptText)
                     if (match != null) {
@@ -440,32 +307,4 @@ class AnimeSuge : MainAPI() {
             false
         }
     }
-    
-    private suspend fun fetchVideoUrlFromApi(dataLinkId: String): String? {
-        return try {
-            val apiUrl = "$mainUrl/ajax/server?get=$dataLinkId"
-            val response = app.get(apiUrl)
-            
-            val json = response.parsedSafe<VideoApiResponse>()
-            
-            if (json?.status == 200) {
-                json.result?.url
-            } else {
-                null
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-    
-    data class VideoApiResponse(
-        val status: Int? = null,
-        val message: String? = null,
-        val result: VideoResult? = null
-    )
-    
-    data class VideoResult(
-        val url: String? = null,
-        val skip_data: Any? = null
-    )
 }
