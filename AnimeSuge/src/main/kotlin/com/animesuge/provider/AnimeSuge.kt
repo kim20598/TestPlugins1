@@ -3,6 +3,7 @@ package com.animesuge.provider
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
@@ -111,8 +112,8 @@ class AnimeSuge : MainAPI() {
                     val apiResponse = app.get(apiUrl).parsedSafe<ApiResponse>()
                     
                     if (apiResponse?.status == 200 && apiResponse.result?.isNotBlank() == true) {
-                        // Parse HTML from API response
-                        val episodesDoc = app.parse(apiResponse.result)
+                        // Parse HTML from API response using Jsoup
+                        val episodesDoc = Jsoup.parse(apiResponse.result)
                         episodesDoc.select("a[href*='/watch/'][href*='/ep-']").mapNotNull { ep ->
                             try {
                                 val episodeUrl = fixUrl(ep.attr("href"))
