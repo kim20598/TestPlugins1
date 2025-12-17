@@ -15,7 +15,7 @@ import java.util.Base64
 class AnimeSuge : MainAPI() {
     override var mainUrl = "https://animesuge.bz"
     override var name = "Animesuge"
-    override val hasMainPage = true
+    override val hasMainPage = false
     override var lang = "en"
     override val supportedTypes = setOf(
         TvType.Anime, TvType.AnimeMovie, TvType.OVA
