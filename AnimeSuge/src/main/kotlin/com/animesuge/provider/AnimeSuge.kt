@@ -159,9 +159,9 @@ class AnimeSuge : MainAPI() {
         }
     }
 
-    override suspend fun load(url: String): LoadResponse {
+    override suspend fun load(loadUrl: String): LoadResponse {
         return try {
-            val document = app.get(url).document
+            val document = app.get(loadUrl).document
             
             // Get title
             val title = document.selectFirst("h1.title, h1, .title")?.text()?.trim() 
@@ -226,7 +226,7 @@ class AnimeSuge : MainAPI() {
             
             // Determine if it's a movie or series
             val typeText = document.selectFirst(".meta:contains(Type), .info:contains(Type)")?.text()?.lowercase() ?: ""
-            val isExplicitlyMovie = typeText.contains("movie") || url.contains("/movie/")
+            val isExplicitlyMovie = typeText.contains("movie") || loadUrl.contains("/movie/")
             
             val hasSeasons = document.select("#ani-seasons, .media-season-head").isNotEmpty()
             val hasEpisodeRange = document.select(".range[data-range], .range-view").isNotEmpty()
@@ -240,20 +240,20 @@ class AnimeSuge : MainAPI() {
             
             if (isMovie) {
                 // For movies, use the first episode URL as dataUrl or the page URL itself
-                val dataUrl = episodes.firstOrNull()?.url ?: url
-                newMovieLoadResponse(title, url, TvType.AnimeMovie, dataUrl) {
+                val dataUrl = episodes.firstOrNull()?.url ?: loadUrl
+                newMovieLoadResponse(title, loadUrl, TvType.AnimeMovie, dataUrl) {
                     this.posterUrl = poster
                     this.plot = plot
                 }
             } else {
-                newTvSeriesLoadResponse(title, url, TvType.Anime, episodes.sortedBy { it.episode }) {
+                newTvSeriesLoadResponse(title, loadUrl, TvType.Anime, episodes.sortedBy { it.episode }) {
                     this.posterUrl = poster
                     this.plot = plot
                 }
             }
             
         } catch (e: Exception) {
-            newTvSeriesLoadResponse("Error Loading", url, TvType.Anime, emptyList()) {
+            newTvSeriesLoadResponse("Error Loading", loadUrl, TvType.Anime, emptyList()) {
                 this.plot = "Failed to load anime details. Please try again."
             }
         }
