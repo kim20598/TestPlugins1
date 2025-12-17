@@ -17,11 +17,11 @@ class AnimeSuge : MainAPI() {
     )
 
     override val mainPage = listOf(
-        HomePageList("Recently Updated", "$mainUrl/latest-updated"),
-        HomePageList("New Releases", "$mainUrl/new-release"),
-        HomePageList("Popular Anime", "$mainUrl/most-viewed"),
-        HomePageList("Completed", "$mainUrl/status/finished-airing"),
-        HomePageList("Ongoing", "$mainUrl/status/currently-airing")
+        MainPageData("Recently Updated", "$mainUrl/latest-updated", true),
+        MainPageData("New Releases", "$mainUrl/new-release", true),
+        MainPageData("Popular Anime", "$mainUrl/most-viewed", true),
+        MainPageData("Completed", "$mainUrl/status/finished-airing", true),
+        MainPageData("Ongoing", "$mainUrl/status/currently-airing", true)
     )
 
     override suspend fun getMainPage(
