@@ -47,30 +47,11 @@ class AnimeSuge : MainAPI() {
             val url = request.data + if (page > 1) "?page=$page" else ""
             val document = app.get(url).document
             
-            // Try different selectors
-            val selectors = listOf(
-                ".item",
-                ".anime-card",
-                ".card",
-                ".anime-poster",
-                ".poster",
-                "article",
-                "a[href*='/watch/']:has(img)"
-            )
-            
-            val home = mutableListOf<SearchResponse>()
-            
-            for (selector in selectors) {
-                val items = document.select(selector)
-                if (items.isNotEmpty()) {
-                    home.addAll(items.mapNotNull { it.toSearchResult() })
-                    break
-                }
-            }
+            val home = document.select(".item, .anime-card, .card, .anime-poster, .poster, article")
+                .mapNotNull { it.toSearchResult() }
             
             return newHomePageResponse(request.name, home.distinctBy { it.url }, hasNext = true)
         } catch (e: Exception) {
-            e.printStackTrace()
             return newHomePageResponse(request.name, emptyList())
         }
     }
@@ -97,77 +78,83 @@ class AnimeSuge : MainAPI() {
                 ?.let { if (it.startsWith("http")) it else "$mainUrl$it" }
             val plot = document.selectFirst(".description, .plot, .summary")?.text()?.trim()
             
-            // Extract anime ID from the page
-            val dataId = document.selectFirst("[data-id]")?.attr("data-id")?.toIntOrNull()
-            val isMovie = document.selectFirst(".meta div:contains(Type) + span")
-                ?.text()?.contains("movie", true) == true
+            // Check if it's a movie by looking at the Type in meta
+            val typeText = document.selectFirst(".meta div:contains(Type) + span")?.text()?.trim()
+            val isMovie = typeText?.contains("movie", true) == true || 
+                         typeText?.contains("movie", true) == true ||
+                         url.contains("/movie/")
             
-            var episodes: List<Episode> = emptyList()
+            // Get episodes - try multiple methods
+            val episodes = mutableListOf<Episode>()
             
-            // Try to get episodes via API
-            if (!isMovie && dataId != null) {
-                episodes = try {
-                    // Try to get episodes from API
-                    val apiUrl = "$mainUrl/api/seasons/$dataId"
-                    val apiResponse = app.get(apiUrl).parsedSafe<ApiResponse>()
-                    
-                    if (apiResponse?.status == 200 && apiResponse.result?.isNotBlank() == true) {
-                        // Parse HTML from API response using Jsoup
-                        val episodesDoc = Jsoup.parse(apiResponse.result)
-                        episodesDoc.select("a[href*='/watch/'][href*='/ep-']").mapNotNull { ep ->
-                            try {
-                                val episodeUrl = fixUrl(ep.attr("href"))
-                                val episodeNumber = ep.attr("data-slug").toIntOrNull()
-                                    ?: ep.text().trim().filter { it.isDigit() }.toIntOrNull()
-                                    ?: return@mapNotNull null
-                                
-                                val episodeName = ep.attr("data-num").takeIf { it.isNotBlank() }
-                                    ?: ep.attr("title").takeIf { it.isNotBlank() }
-                                    ?: "Episode $episodeNumber"
-                                
+            if (!isMovie) {
+                // Method 1: Look for episode links in the page
+                val episodeLinks = document.select("a[href*='/watch/'][href*='/ep-']")
+                if (episodeLinks.isNotEmpty()) {
+                    episodeLinks.forEach { ep ->
+                        try {
+                            val episodeUrl = fixUrl(ep.attr("href"))
+                            val episodeNumber = ep.attr("data-slug").toIntOrNull()
+                                ?: ep.text().trim().filter { it.isDigit() }.toIntOrNull()
+                                ?: return@forEach
+                            
+                            val episodeName = ep.attr("data-num").takeIf { it.isNotBlank() }
+                                ?: ep.attr("title").takeIf { it.isNotBlank() }
+                                ?: "Episode $episodeNumber"
+                            
+                            episodes.add(
                                 newEpisode(episodeUrl) {
                                     name = episodeName
                                     this.episode = episodeNumber
                                 }
-                            } catch (e: Exception) {
-                                null
-                            }
+                            )
+                        } catch (e: Exception) {
+                            // Skip episode
+                        }
+                    }
+                } else {
+                    // Method 2: Check the dub-sub-total count
+                    val subCount = document.selectFirst(".dub-sub-total .sub")?.text()?.toIntOrNull() ?: 0
+                    val dubCount = document.selectFirst(".dub-sub-total .dub")?.text()?.toIntOrNull() ?: 0
+                    val totalCount = document.selectFirst(".dub-sub-total .total")?.text()?.toIntOrNull() ?: 0
+                    
+                    val episodeCount = maxOf(subCount, dubCount, totalCount)
+                    
+                    if (episodeCount > 0) {
+                        // Generate episode URLs based on the URL pattern
+                        val baseUrl = url.substringBeforeLast("/ep-").substringBeforeLast("/")
+                        for (i in 1..episodeCount) {
+                            val episodeUrl = "$baseUrl/ep-$i"
+                            episodes.add(
+                                newEpisode(episodeUrl) {
+                                    name = "Episode $i"
+                                    this.episode = i
+                                }
+                            )
                         }
                     } else {
-                        // Fallback: try to find episodes in the page
-                        document.select("a[href*='/watch/'][href*='/ep-']").mapNotNull { ep ->
-                            try {
-                                val episodeUrl = fixUrl(ep.attr("href"))
-                                val episodeNumber = ep.attr("data-slug").toIntOrNull()
-                                    ?: ep.text().trim().filter { it.isDigit() }.toIntOrNull()
-                                    ?: return@mapNotNull null
-                                
-                                val episodeName = ep.attr("data-num").takeIf { it.isNotBlank() }
-                                    ?: ep.attr("title").takeIf { it.isNotBlank() }
-                                    ?: "Episode $episodeNumber"
-                                
-                                newEpisode(episodeUrl) {
-                                    name = episodeName
-                                    this.episode = episodeNumber
-                                }
-                            } catch (e: Exception) {
-                                null
+                        // Method 3: Check meta for episode count
+                        val metaEpisodes = document.select(".meta div:contains(Episodes:) + span")?.text()?.toIntOrNull() ?: 0
+                        if (metaEpisodes > 0) {
+                            val baseUrl = url.substringBeforeLast("/")
+                            for (i in 1..metaEpisodes) {
+                                val episodeUrl = "$baseUrl/ep-$i"
+                                episodes.add(
+                                    newEpisode(episodeUrl) {
+                                        name = "Episode $i"
+                                        this.episode = i
+                                    }
+                                )
                             }
                         }
                     }
-                } catch (e: Exception) {
-                    emptyList()
                 }
             }
             
-            // Determine if it's a movie or series
-            val type = if (isMovie || episodes.isEmpty()) {
-                TvType.AnimeMovie
-            } else {
-                TvType.Anime
-            }
+            // Log for debugging
+            println("AnimeSuge Debug: Title=$title, isMovie=$isMovie, episodesFound=${episodes.size}")
             
-            if (type == TvType.AnimeMovie) {
+            if (isMovie || episodes.isEmpty()) {
                 newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
                     this.posterUrl = poster
                     this.plot = plot
@@ -180,7 +167,6 @@ class AnimeSuge : MainAPI() {
             }
             
         } catch (e: Exception) {
-            e.printStackTrace()
             newMovieLoadResponse("Error", url, TvType.AnimeMovie, url) {
                 this.plot = "Failed to load: ${e.message}"
             }
@@ -196,19 +182,12 @@ class AnimeSuge : MainAPI() {
         return try {
             val document = app.get(data).document
             
-            // Try to extract server data from the page
-            val serversScript = document.select("script").find { script ->
-                script.html().contains("data-link-id")
-            }
+            // Try to find server data
+            val serverElements = document.select(".server[data-link-id], [data-link-id]")
             
-            if (serversScript != null) {
-                val scriptText = serversScript.html()
-                // Look for data-link-id pattern
-                val linkIdRegex = Regex("data-link-id=['\"]([^'\"]+)['\"]")
-                val match = linkIdRegex.find(scriptText)
-                
-                if (match != null) {
-                    val dataLinkId = match.groupValues[1]
+            for (server in serverElements) {
+                val dataLinkId = server.attr("data-link-id")
+                if (dataLinkId.isNotBlank()) {
                     // Try different server patterns
                     val serverPatterns = listOf("s-1", "s-2", "s-3", "s-4")
                     for (serverNum in serverPatterns) {
@@ -220,7 +199,7 @@ class AnimeSuge : MainAPI() {
                 }
             }
             
-            // Look for iframe
+            // Look for iframe as fallback
             val iframe = document.selectFirst("iframe[src]")
             val iframeSrc = iframe?.attr("src")?.takeIf { it.isNotBlank() }
                 ?.let { if (it.startsWith("http")) it else "https:$it" }
@@ -231,7 +210,6 @@ class AnimeSuge : MainAPI() {
             
             false
         } catch (e: Exception) {
-            e.printStackTrace()
             false
         }
     }
