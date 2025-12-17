@@ -21,10 +21,25 @@ class AnimeSugeMegaPlay : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // Extract video ID from URL
-            // URL format: https://megaplay.buzz/stream/s-4/130592?autostart=true
+            // URL format: https://megaplay.buzz/stream/s-2/136197/dub?autostart=true
+            // or: https://megaplay.buzz/stream/s-2/136197?autostart=true
+            
+            // Extract the path after /stream/
             val path = url.removePrefix("$mainUrl/stream/")
-            val videoId = path.substringAfter("/").substringBefore("?")
+            val parts = path.split("/")
+            
+            // Get the video ID (could be the second or third part depending on language)
+            val videoId = if (parts.size >= 2) {
+                // Check if the last part before ? is language or ID
+                val lastPart = parts[1].substringBefore("?")
+                if (lastPart == "sub" || lastPart == "dub") {
+                    parts.getOrNull(0)?.substringBefore("?") ?: lastPart
+                } else {
+                    lastPart
+                }
+            } else {
+                parts.getOrNull(0)?.substringBefore("?") ?: return
+            }
             
             // Call MegaPlay API
             val apiUrl = "$mainUrl/stream/getSources?id=$videoId"
