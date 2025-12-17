@@ -161,10 +161,12 @@ class KooraLite : MainAPI() {
     ): Boolean {
         try {
             val dataUrl = fixUrl(data)
+            var foundLinks = false
             
             // 1. First, check if this is already a direct albaplayer URL
             if (dataUrl.contains("albaplayer")) {
-                return extractFromAlbaPlayerPage(dataUrl, callback)
+                foundLinks = extractAllServersFromAlbaPlayerPage(dataUrl, callback)
+                if (foundLinks) return true
             }
             
             // 2. Otherwise, fetch the page and look for albaplayer iframe
@@ -174,96 +176,155 @@ class KooraLite : MainAPI() {
             val iframe = doc.select("iframe[src*='albaplayer']").firstOrNull()
             if (iframe != null) {
                 val iframeSrc = fixUrl(iframe.attr("src"))
-                return extractFromAlbaPlayerPage(iframeSrc, callback)
+                foundLinks = extractAllServersFromAlbaPlayerPage(iframeSrc, callback)
+                if (foundLinks) return true
             }
             
-            // 3. Check for direct M3U8 links in the page
-            val scripts = doc.select("script").html()
-            val m3u8Pattern = Regex("""['"](https?://[^'"]*\.m3u8[^'"]*)['"]""")
-            val match = m3u8Pattern.find(scripts)
-            
-            if (match != null) {
-                val streamUrl = match.groupValues[1]
-                callback.invoke(
-                    newExtractorLink(
-                        name,
-                        "$name - بث مباشر",
-                        streamUrl,
-                        ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = dataUrl
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-                return true
+            // 3. Also check for ALL albaplayer iframes (there might be multiple)
+            doc.select("iframe[src*='albaplayer']").forEach { iframe ->
+                val iframeSrc = fixUrl(iframe.attr("src"))
+                foundLinks = extractAllServersFromAlbaPlayerPage(iframeSrc, callback) || foundLinks
             }
             
-            return false
+            return foundLinks
             
         } catch (e: Exception) {
             return false
         }
     }
 
-    private suspend fun extractFromAlbaPlayerPage(
+    private suspend fun extractAllServersFromAlbaPlayerPage(
         url: String,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        var foundAnyLink = false
+        
         try {
             val doc = app.get(url).document
             
-            // Look for AlbaPlayerControl in scripts
-            val scripts = doc.select("script").html()
-            val regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
-            val match = regex.find(scripts)
+            // ============================
+            // METHOD 1: Extract from server menu (بث رئيسي, جوال, English, etc.)
+            // ============================
+            val serverLinks = doc.select(".aplr-menu a.aplr-link")
             
-            if (match != null) {
-                val base64String = match.groupValues[1]
-                val decodedUrl = decodeBase64(base64String)
-                
-                if (decodedUrl.isNotBlank()) {
-                    val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
-                    
-                    callback.invoke(
-                        newExtractorLink(
-                            name,
-                            "$name - بث مباشر",
-                            streamUrl,
-                            ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = url
-                            this.quality = Qualities.Unknown.value
-                        }
-                    )
-                    return true
+            // Extract server names and URLs
+            val servers = mutableListOf<Pair<String, String>>()
+            serverLinks.forEach { link ->
+                val serverName = link.text().trim()
+                val serverHref = link.attr("href")
+                if (serverName.isNotBlank() && serverHref.isNotBlank()) {
+                    servers.add(Pair(serverName, serverHref))
                 }
             }
             
-            // Also check for direct M3U8 links
-            val m3u8Pattern = Regex("""['"](https?://[^'"]*\.m3u8[^'"]*)['"]""")
-            val m3u8Match = m3u8Pattern.find(scripts)
-            
-            if (m3u8Match != null) {
-                val streamUrl = m3u8Match.groupValues[1]
-                callback.invoke(
-                    newExtractorLink(
-                        name,
-                        "$name - بث مباشر",
-                        streamUrl,
-                        ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = url
-                        this.quality = Qualities.Unknown.value
+            // Process each server
+            for ((index, server) in servers.withIndex()) {
+                val (serverName, serverUrl) = server
+                
+                try {
+                    // Fetch each server page to get its stream
+                    val serverDoc = app.get(fixUrl(serverUrl)).document
+                    val serverScripts = serverDoc.select("script").html()
+                    
+                    // Look for AlbaPlayerControl in this server's page
+                    val regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
+                    val match = regex.find(serverScripts)
+                    
+                    if (match != null) {
+                        val base64String = match.groupValues[1]
+                        val decodedUrl = decodeBase64(base64String)
+                        
+                        if (decodedUrl.isNotBlank()) {
+                            val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
+                            
+                            // Assign quality based on server name
+                            val quality = when {
+                                serverName.contains("رئيسي", ignoreCase = true) -> Qualities.P1080.value
+                                serverName.contains("جوال", ignoreCase = true) -> Qualities.P720.value
+                                serverName.contains("english", ignoreCase = true) -> Qualities.P1080.value
+                                else -> Qualities.Unknown.value
+                            }
+                            
+                            callback.invoke(
+                                newExtractorLink(
+                                    name,
+                                    "$name - $serverName",
+                                    streamUrl,
+                                    ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = serverUrl
+                                    this.quality = quality
+                                }
+                            )
+                            foundAnyLink = true
+                        }
                     }
-                )
-                return true
+                } catch (e: Exception) {
+                    // Skip this server if it fails
+                    continue
+                }
+            }
+            
+            // ============================
+            // METHOD 2: Extract from main page if no servers found
+            // ============================
+            if (!foundAnyLink) {
+                val mainScripts = doc.select("script").html()
+                
+                // Look for AlbaPlayerControl in main page
+                val regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
+                val match = regex.find(mainScripts)
+                
+                if (match != null) {
+                    val base64String = match.groupValues[1]
+                    val decodedUrl = decodeBase64(base64String)
+                    
+                    if (decodedUrl.isNotBlank()) {
+                        val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
+                        
+                        callback.invoke(
+                            newExtractorLink(
+                                name,
+                                "$name - بث رئيسي",
+                                streamUrl,
+                                ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = url
+                                this.quality = Qualities.P1080.value
+                            }
+                        )
+                        foundAnyLink = true
+                    }
+                }
+                
+                // Also check for direct M3U8 links
+                val m3u8Pattern = Regex("""['"](https?://[^'"]*\.m3u8[^'"]*)['"]""")
+                val m3u8Matches = m3u8Pattern.findAll(mainScripts).toList()
+                
+                m3u8Matches.forEachIndexed { index, m3u8Match ->
+                    val streamUrl = m3u8Match.groupValues[1]
+                    if (streamUrl.isNotBlank() && streamUrl.contains("m3u8")) {
+                        callback.invoke(
+                            newExtractorLink(
+                                name,
+                                "$name - خيار ${index + 1}",
+                                streamUrl,
+                                ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = url
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
+                        foundAnyLink = true
+                    }
+                }
             }
             
         } catch (e: Exception) {
             // Do nothing, just return false
         }
         
-        return false
+        return foundAnyLink
     }
 
     private fun fixUrl(url: String): String {
