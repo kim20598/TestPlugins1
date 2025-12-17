@@ -6,7 +6,7 @@ import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
 class AnimeSuge : MainAPI() {
-    override var mainUrl = "https://animesuge.to"
+    override var mainUrl = "https://animesuge.bz"
     override var name = "AnimeSuge"
     override val hasMainPage = true
     override var lang = "en"
