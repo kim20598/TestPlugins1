@@ -2,17 +2,17 @@ package com.animesuge.provider
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import org.jsoup.nodes.Element
 import java.net.URLEncoder
+import java.util.Base64
 
 class AnimeSuge : MainAPI() {
-    override var mainUrl = "https://animesuge.to"
+    override var mainUrl = "https://animesuge.bz"
     override var name = "Animesuge"
     override val hasMainPage = true
     override var lang = "en"
     override val supportedTypes = setOf(
-        TvType.Anime,
-        TvType.AnimeMovie,
+        TvType.Anime, 
+        TvType.AnimeMovie, 
         TvType.OVA
     )
 
@@ -175,7 +175,7 @@ class AnimeSuge : MainAPI() {
             // Get plot
             val plot = document.selectFirst(".description, .plot")?.text()?.trim()
             
-            // Get episodes
+            // Get episodes - FIXED EPISODE DETECTION
             val episodes = mutableListOf<Episode>()
             
             // Look for episodes in multiple places
@@ -220,22 +220,26 @@ class AnimeSuge : MainAPI() {
                             // Skip episode errors
                         }
                     }
-                    break
+                    break // Stop after finding episodes
                 }
             }
             
-            // Determine if it's a movie or series
+            // Check if it's REALLY a movie or a series
             val typeText = document.selectFirst(".meta:contains(Type), .info:contains(Type)")?.text()?.lowercase() ?: ""
             val isExplicitlyMovie = typeText.contains("movie") || url.contains("/movie/")
             
+            // Check if it has seasons (series indicator)
             val hasSeasons = document.select("#ani-seasons, .media-season-head").isNotEmpty()
+            
+            // Check if there's an episode range indicator
             val hasEpisodeRange = document.select(".range[data-range], .range-view").isNotEmpty()
             
+            // Determine final type
             val isMovie = when {
                 isExplicitlyMovie -> true
-                episodes.isEmpty() && !hasSeasons -> true
-                episodes.size == 1 && !hasSeasons && !hasEpisodeRange -> true
-                else -> false
+                episodes.isEmpty() && !hasSeasons -> true // No episodes and no seasons = probably movie
+                episodes.size == 1 && !hasSeasons && !hasEpisodeRange -> true // Single episode with no series indicators
+                else -> false // Has episodes or series indicators = TV series
             }
             
             if (isMovie) {
@@ -251,6 +255,7 @@ class AnimeSuge : MainAPI() {
             }
             
         } catch (e: Exception) {
+            // Return a basic series response (not movie) on error
             newTvSeriesLoadResponse("Error Loading", url, TvType.Anime, emptyList()) {
                 this.plot = "Failed to load anime details. Please try again."
             }
@@ -267,11 +272,12 @@ class AnimeSuge : MainAPI() {
             val document = app.get(data).document
             var foundLinks = false
             
-            // Method 1: Look for servers with data-link-id
+            // Method 1: Look for servers and fetch video URL from API
             val servers = document.select(".server[data-link-id]")
             for (server in servers) {
                 val dataLinkId = server.attr("data-link-id")
                 if (dataLinkId.isNotBlank()) {
+                    // Fetch video URL from the API endpoint
                     try {
                         val videoUrl = fetchVideoUrlFromApi(dataLinkId)
                         if (videoUrl != null && videoUrl.isNotBlank()) {
@@ -281,7 +287,7 @@ class AnimeSuge : MainAPI() {
                             }
                         }
                     } catch (e: Exception) {
-                        // If API fails, try direct Megaplay URL
+                        // If API fails, try direct Megaplay URL as fallback
                         val megaUrl = "https://megaplay.buzz/stream/s-1/$dataLinkId"
                         if (loadExtractor(megaUrl, subtitleCallback, callback)) {
                             foundLinks = true
