@@ -240,16 +240,9 @@ class AnimeSuge : MainAPI() {
                 }
             }
             
-            // Get data-ids for video sources
-            val dataIds = episodeElement.attr("data-ids").takeIf { it.isNotBlank() }
-            
             newEpisode(episodeUrl) {
                 name = episodeTitle
                 this.episode = episodeNumber
-                // Store data-ids as additional data if available
-                if (!dataIds.isNullOrBlank()) {
-                    this.data = dataIds
-                }
             }
         }.sortedBy { it.episode ?: 0 }
     }
@@ -328,10 +321,21 @@ class AnimeSuge : MainAPI() {
             val episodeDoc = app.get(episodeUrl).document
             var foundSources = false
             
-            // Method 1: Look for active server iframe
+            // Method 1: First, look for the active server iframe
             val activeServer = episodeDoc.select(".server.active")
             if (activeServer.isNotEmpty()) {
-                // Look for iframe inside or related to the active server
+                // Get the active server's data-link-id
+                val dataLinkId = activeServer.attr("data-link-id")
+                if (dataLinkId.isNotBlank()) {
+                    // For Megaplay server, construct the URL
+                    val serverName = activeServer.select("span").text().lowercase()
+                    if (serverName.contains("megaplay")) {
+                        val videoUrl = "https://megaplay.buzz/stream/s-1/$dataLinkId?autostart=true"
+                        foundSources = loadExtractor(videoUrl, subtitleCallback, callback) || foundSources
+                    }
+                }
+                
+                // Also check for iframe
                 val iframe = episodeDoc.select("iframe[src]").firstOrNull()
                 if (iframe != null) {
                     val iframeSrc = iframe.attr("abs:src")
@@ -341,34 +345,21 @@ class AnimeSuge : MainAPI() {
                 }
             }
             
-            // Method 2: Look for server list with data-link-id
+            // Method 2: Look for all server elements
             val serverElements = episodeDoc.select(".server, .server-list .server")
             for (server in serverElements) {
-                // Get server name from span or div text
                 val serverName = server.select("span, div").text().trim()
-                    .takeIf { it.isNotBlank() } ?: "Unknown Server"
-                
-                // Check for data-link-id attribute
                 val dataLinkId = server.attr("data-link-id")
-                if (dataLinkId.isNotBlank()) {
+                
+                if (dataLinkId.isNotBlank() && !foundSources) {
                     try {
-                        // Decode the base64 data-link-id
-                        val decodedBytes = Base64.getDecoder().decode(dataLinkId)
-                        val decodedUrl = String(decodedBytes)
-                        
-                        if (decodedUrl.isNotBlank()) {
-                            foundSources = loadExtractor(decodedUrl, subtitleCallback, callback) || foundSources
-                        }
-                    } catch (e: Exception) {
-                        // If decoding fails, try to construct URL from data-link-id
+                        // Try to construct URL based on server name
                         val videoUrl = when {
-                            dataLinkId.startsWith("http") -> dataLinkId
-                            serverName.contains("megaplay", true) -> {
-                                // Handle Megaplay URLs
-                                "https://megaplay.buzz/stream/s-1/$dataLinkId"
+                            serverName.contains("Megaplay", true) -> {
+                                "https://megaplay.buzz/stream/s-1/$dataLinkId?autostart=true"
                             }
-                            serverName.contains("kiwi", true) -> {
-                                // Handle Kiwi Stream URLs
+                            serverName.contains("Kiwi", true) -> {
+                                // Kiwi streams might need special handling
                                 "https://kiwistream.pro/player/$dataLinkId"
                             }
                             else -> null
@@ -377,51 +368,69 @@ class AnimeSuge : MainAPI() {
                         if (videoUrl != null) {
                             foundSources = loadExtractor(videoUrl, subtitleCallback, callback) || foundSources
                         }
+                    } catch (e: Exception) {
+                        // Ignore errors for individual servers
                     }
                 }
             }
             
-            // Method 3: Look for episode data-ids attribute (from episode list)
-            val currentEpisodeLink = episodeDoc.select("a[href='$episodeUrl'], a[href*='${episodeUrl.substringAfterLast("/")}']").firstOrNull()
-            val dataIds = currentEpisodeLink?.attr("data-ids")
-            
-            if (!dataIds.isNullOrBlank() && !foundSources) {
-                try {
-                    // Decode base64 data-ids
-                    val decodedBytes = Base64.getDecoder().decode(dataIds)
-                    val decodedString = String(decodedBytes)
+            // Method 3: Look for scripts that might contain video data
+            if (!foundSources) {
+                val scripts = episodeDoc.select("script")
+                for (script in scripts) {
+                    val scriptText = script.html()
                     
-                    // Try to extract video URLs from decoded string
-                    if (decodedString.contains("http")) {
-                        // The decoded string might contain the video URL
-                        foundSources = loadExtractor(decodedString, subtitleCallback, callback) || foundSources
-                    } else {
-                        // Might need double decoding (nested base64)
-                        try {
-                            val doubleDecodedBytes = Base64.getDecoder().decode(decodedString)
-                            val doubleDecodedString = String(doubleDecodedBytes)
-                            if (doubleDecodedString.contains("http")) {
-                                foundSources = loadExtractor(doubleDecodedString, subtitleCallback, callback) || foundSources
+                    // Look for various video URL patterns
+                    val patterns = listOf(
+                        Regex("""src\s*:\s*["'](https?://[^"']+)["']"""),
+                        Regex("""file\s*:\s*["'](https?://[^"']+)["']"""),
+                        Regex("""video_url\s*:\s*["'](https?://[^"']+)["']"""),
+                        Regex("""(https?://[^\s"']*\.(mp4|m3u8|webm)[^\s"']*)"""),
+                        Regex("""data-link-id\s*=\s*["']([^"']+)["']""")
+                    )
+                    
+                    for (pattern in patterns) {
+                        val matches = pattern.findAll(scriptText)
+                        for (match in matches) {
+                            val urlOrId = match.groupValues[1]
+                            if (urlOrId.isNotBlank()) {
+                                if (urlOrId.startsWith("http")) {
+                                    // Direct URL
+                                    if (urlOrId.contains(".mp4") || urlOrId.contains(".m3u8") || urlOrId.contains(".webm")) {
+                                        callback(
+                                            newExtractorLink(
+                                                name = "Direct",
+                                                url = urlOrId,
+                                                source = this.name,
+                                                type = when {
+                                                    urlOrId.contains(".m3u8") -> ExtractorLinkType.M3U8
+                                                    else -> ExtractorLinkType.VIDEO
+                                                }
+                                            ) {
+                                                this.quality = getQualityFromName(urlOrId) ?: Qualities.Unknown.value
+                                            }
+                                        )
+                                        foundSources = true
+                                    } else {
+                                        foundSources = loadExtractor(urlOrId, subtitleCallback, callback) || foundSources
+                                    }
+                                } else if (urlOrId.length > 50) {
+                                    // Might be a data-link-id
+                                    try {
+                                        // Try Megaplay URL
+                                        val megaUrl = "https://megaplay.buzz/stream/s-1/$urlOrId?autostart=true"
+                                        foundSources = loadExtractor(megaUrl, subtitleCallback, callback) || foundSources
+                                    } catch (e: Exception) {
+                                        // Ignore
+                                    }
+                                }
                             }
-                        } catch (e: Exception) {
-                            // Ignore if double decoding fails
                         }
                     }
-                } catch (e: Exception) {
-                    // If decoding fails, continue to other methods
                 }
             }
             
-            // Method 4: Look for direct iframe sources as fallback
-            val iframes = episodeDoc.select("iframe[src]")
-            for (iframe in iframes) {
-                val iframeSrc = iframe.attr("abs:src")
-                if (iframeSrc.isNotBlank() && !foundSources) {
-                    foundSources = loadExtractor(iframeSrc, subtitleCallback, callback) || foundSources
-                }
-            }
-            
-            // Method 5: Look for video elements with data
+            // Method 4: Look for direct video elements
             val videoElements = episodeDoc.select("video source[src], video[src]")
             for (videoSource in videoElements) {
                 val src = videoSource.attr("abs:src").ifBlank { 
@@ -447,59 +456,14 @@ class AnimeSuge : MainAPI() {
                 }
             }
             
-            // Method 6: Look for script with video data
-            val scripts = episodeDoc.select("script")
-            for (script in scripts) {
-                val scriptText = script.html()
-                
-                // Look for common video URL patterns
-                val videoPatterns = listOf(
-                    Regex("""(https?://[^\s"']*\.(mp4|m3u8|webm)[^\s"']*)""", RegexOption.IGNORE_CASE),
-                    Regex("""file\s*:\s*["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE),
-                    Regex("""src\s*:\s*["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE),
-                    Regex("""video_url\s*:\s*["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE),
-                    Regex("""data-link-id\s*:\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE),
-                    Regex("""data-ids\s*:\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
-                )
-                
-                for (pattern in videoPatterns) {
-                    val matches = pattern.findAll(scriptText)
-                    for (match in matches) {
-                        val foundData = match.groupValues[1]
-                        if (foundData.isNotBlank()) {
-                            if (foundData.contains("http")) {
-                                // Direct URL
-                                if (foundData.contains(".mp4") || foundData.contains(".m3u8") || foundData.contains(".webm")) {
-                                    callback(
-                                        newExtractorLink(
-                                            name = "Script Video",
-                                            url = foundData,
-                                            source = this.name,
-                                            type = when {
-                                                foundData.contains(".m3u8") -> ExtractorLinkType.M3U8
-                                                else -> ExtractorLinkType.VIDEO
-                                            }
-                                        ) {
-                                            this.quality = getQualityFromName(foundData) ?: Qualities.Unknown.value
-                                        }
-                                    )
-                                    foundSources = true
-                                } else {
-                                    foundSources = loadExtractor(foundData, subtitleCallback, callback) || foundSources
-                                }
-                            } else if (foundData.length > 20) {
-                                // Might be base64 encoded data
-                                try {
-                                    val decodedBytes = Base64.getDecoder().decode(foundData)
-                                    val decodedString = String(decodedBytes)
-                                    if (decodedString.contains("http")) {
-                                        foundSources = loadExtractor(decodedString, subtitleCallback, callback) || foundSources
-                                    }
-                                } catch (e: Exception) {
-                                    // Ignore decoding errors
-                                }
-                            }
-                        }
+            // Method 5: Look for iframes as final fallback
+            if (!foundSources) {
+                val iframes = episodeDoc.select("iframe[src]")
+                for (iframe in iframes) {
+                    val iframeSrc = iframe.attr("abs:src")
+                    if (iframeSrc.isNotBlank()) {
+                        foundSources = loadExtractor(iframeSrc, subtitleCallback, callback) || foundSources
+                        if (foundSources) break
                     }
                 }
             }
