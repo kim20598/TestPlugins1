@@ -21,32 +21,54 @@ class AnimeSugeMegaPlay : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // URL format: https://megaplay.buzz/stream/s-2/136197/dub?autostart=true
-            // or: https://megaplay.buzz/stream/s-2/136197?autostart=true
-            
-            // Extract the path after /stream/
+            // Extract the ID from the URL
             val path = url.removePrefix("$mainUrl/stream/")
             val parts = path.split("/")
             
-            // Get the video ID (could be the second or third part depending on language)
-            val videoId = if (parts.size >= 2) {
-                // Check if the last part before ? is language or ID
-                val lastPart = parts[1].substringBefore("?")
-                if (lastPart == "sub" || lastPart == "dub") {
-                    parts.getOrNull(0)?.substringBefore("?") ?: lastPart
-                } else {
-                    lastPart
+            var videoId: String? = null
+            if (parts.isNotEmpty()) {
+                // The ID could be in different positions
+                when {
+                    parts.size >= 2 -> {
+                        val possibleId = parts[1].substringBefore("?")
+                        videoId = if (possibleId == "sub" || possibleId == "dub") {
+                            parts[0]
+                        } else {
+                            possibleId
+                        }
+                    }
+                    parts.size == 1 -> {
+                        videoId = parts[0].substringBefore("?")
+                    }
                 }
-            } else {
-                parts.getOrNull(0)?.substringBefore("?") ?: return
             }
             
-            // Call MegaPlay API
+            if (videoId != null) {
+                // Try the API first
+                tryApiMethod(videoId, url, subtitleCallback, callback)
+            } else {
+                // Fallback to direct extraction
+                loadExtractor(url, subtitleCallback, callback)
+            }
+        } catch (e: Exception) {
+            // Fallback to generic extractor
+            loadExtractor(url, subtitleCallback, callback)
+        }
+    }
+    
+    private suspend fun tryApiMethod(
+        videoId: String,
+        originalUrl: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
             val apiUrl = "$mainUrl/stream/getSources?id=$videoId"
             val headers = mapOf(
                 "Accept" to "*/*",
                 "X-Requested-With" to "XMLHttpRequest",
-                "Referer" to url
+                "Referer" to originalUrl,
+                "Origin" to mainUrl
             )
             
             val response = app.get(apiUrl, headers = headers).parsedSafe<MegaPlayResponse>()
@@ -57,27 +79,30 @@ class AnimeSugeMegaPlay : ExtractorApi() {
                 // Get subtitles if available
                 response.tracks?.forEach { track ->
                     if ((track.kind == "captions" || track.kind == "subtitles") && track.file != null) {
-                        subtitleCallback(newSubtitleFile(track.label ?: "Unknown", track.file))
+                        subtitleCallback(newSubtitleFile(
+                            track.label ?: if (track.kind == "captions") "English" else "Unknown",
+                            track.file
+                        ))
                     }
                 }
                 
-                // Generate M3U8 links
+                // Generate M3U8 links with quality detection
                 M3u8Helper.generateM3u8(
                     name,
                     m3u8Url,
                     mainUrl,
                     headers = mapOf(
                         "Referer" to mainUrl,
-                        "Origin" to mainUrl
+                        "Origin" to mainUrl,
+                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
                     )
                 ).forEach(callback)
             } else {
-                // If API doesn't work, try direct M3U8 extraction
-                loadExtractor(url, subtitleCallback, callback)
+                // If API doesn't work, try direct extraction
+                loadExtractor(originalUrl, subtitleCallback, callback)
             }
         } catch (e: Exception) {
-            // Fallback to generic extractor
-            loadExtractor(url, subtitleCallback, callback)
+            loadExtractor(originalUrl, subtitleCallback, callback)
         }
     }
     
