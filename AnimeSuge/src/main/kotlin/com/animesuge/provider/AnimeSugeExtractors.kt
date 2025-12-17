@@ -1,4 +1,3 @@
-// AnimeSugeExtractors.kt
 package com.animesuge.provider
 
 import com.fasterxml.jackson.annotation.JsonProperty
@@ -8,6 +7,7 @@ import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
+import com.lagradost.cloudstream3.utils.loadExtractor
 
 class AnimeSugeMegaPlay : ExtractorApi() {
     override val name = "AnimeSuge MegaPlay"
