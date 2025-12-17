@@ -157,9 +157,9 @@ class AnimeSuge : MainAPI() {
         }
     }
 
-    override suspend fun load(url: String): LoadResponse {
+    override suspend fun load(loadUrl: String): LoadResponse {
         return try {
-            val document = app.get(url).document
+            val document = app.get(loadUrl).document
             
             val title = document.selectFirst("h1.title, h1, .title")?.text()?.trim() 
                 ?: "Unknown Title"
@@ -171,12 +171,12 @@ class AnimeSuge : MainAPI() {
             val plot = document.selectFirst(".description, .plot")?.text()?.trim()
             
             // NEW: COMPLETELY REDESIGNED EPISODE EXTRACTION
-            val episodes = extractEpisodes(document, url)
+            val episodes = extractEpisodes(document, loadUrl)
             
             // Check if it's explicitly a movie
             val typeElement = document.selectFirst(".meta div:contains(Type) + span, .info:contains(Type), .meta-item:contains(Type)")
             val typeText = typeElement?.text()?.lowercase() ?: ""
-            val isExplicitlyMovie = typeText.contains("movie") || url.contains("/movie/")
+            val isExplicitlyMovie = typeText.contains("movie") || loadUrl.contains("/movie/")
             
             // Check for series indicators
             val hasSeasons = document.select("#ani-seasons, .media-season-head, .season-selector").isNotEmpty()
@@ -192,15 +192,15 @@ class AnimeSuge : MainAPI() {
             
             if (isMovie) {
                 // For movies, use the first episode URL or the page itself
-                val dataUrl = episodes.firstOrNull()?.url ?: url
-                newMovieLoadResponse(title, url, TvType.AnimeMovie, dataUrl) {
+                val dataUrl = episodes.firstOrNull()?.url ?: loadUrl
+                newMovieLoadResponse(title, loadUrl, TvType.AnimeMovie, dataUrl) {
                     this.posterUrl = poster
                     this.plot = plot
                 }
             } else {
                 // For series, sort episodes by number
                 val sortedEpisodes = episodes.sortedBy { it.episode ?: 0 }
-                newTvSeriesLoadResponse(title, url, TvType.Anime, sortedEpisodes) {
+                newTvSeriesLoadResponse(title, loadUrl, TvType.Anime, sortedEpisodes) {
                     this.posterUrl = poster
                     this.plot = plot
                 }
@@ -208,7 +208,7 @@ class AnimeSuge : MainAPI() {
             
         } catch (e: Exception) {
             // Default to series on error
-            newTvSeriesLoadResponse("Error Loading", url, TvType.Anime, emptyList()) {
+            newTvSeriesLoadResponse("Error Loading", loadUrl, TvType.Anime, emptyList()) {
                 this.plot = "Failed to load anime details. Please try again."
             }
         }
