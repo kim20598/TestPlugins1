@@ -1,3 +1,4 @@
+// AnimeSugeExtractors.kt
 package com.animesuge.provider
 
 import com.fasterxml.jackson.annotation.JsonProperty
@@ -7,7 +8,6 @@ import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
-import com.lagradost.cloudstream3.utils.loadExtractor
 
 class AnimeSugeMegaPlay : ExtractorApi() {
     override val name = "AnimeSuge MegaPlay"
@@ -21,12 +21,13 @@ class AnimeSugeMegaPlay : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // Extract video ID from URL like: https://megaplay.buzz/stream/s-4/130592?autostart=true
+            // Extract video ID from URL
+            // URL format: https://megaplay.buzz/stream/s-4/130592?autostart=true
             val path = url.removePrefix("$mainUrl/stream/")
             val videoId = path.substringAfter("/").substringBefore("?")
             
+            // Call MegaPlay API
             val apiUrl = "$mainUrl/stream/getSources?id=$videoId"
-            
             val headers = mapOf(
                 "Accept" to "*/*",
                 "X-Requested-With" to "XMLHttpRequest",
@@ -38,7 +39,7 @@ class AnimeSugeMegaPlay : ExtractorApi() {
             if (response?.sources?.file != null) {
                 val m3u8Url = response.sources.file
                 
-                // Get subtitles
+                // Get subtitles if available
                 response.tracks?.forEach { track ->
                     if ((track.kind == "captions" || track.kind == "subtitles") && track.file != null) {
                         subtitleCallback(newSubtitleFile(track.label ?: "Unknown", track.file))
@@ -56,7 +57,7 @@ class AnimeSugeMegaPlay : ExtractorApi() {
                     )
                 ).forEach(callback)
             } else {
-                // Fallback to generic extractor
+                // If API doesn't work, try direct M3U8 extraction
                 loadExtractor(url, subtitleCallback, callback)
             }
         } catch (e: Exception) {
@@ -67,16 +68,31 @@ class AnimeSugeMegaPlay : ExtractorApi() {
     
     data class MegaPlayResponse(
         @JsonProperty("sources") val sources: Sources? = null,
-        @JsonProperty("tracks") val tracks: List<Track>? = null
+        @JsonProperty("tracks") val tracks: List<Track>? = null,
+        @JsonProperty("server") val server: Int? = null,
+        @JsonProperty("intro") val intro: Intro? = null,
+        @JsonProperty("outro") val outro: Outro? = null
     )
     
     data class Sources(
-        @JsonProperty("file") val file: String? = null
+        @JsonProperty("file") val file: String? = null,
+        @JsonProperty("type") val type: String? = null
     )
     
     data class Track(
         @JsonProperty("file") val file: String? = null,
         @JsonProperty("label") val label: String? = null,
-        @JsonProperty("kind") val kind: String? = null
+        @JsonProperty("kind") val kind: String? = null,
+        @JsonProperty("default") val default: Boolean? = null
+    )
+    
+    data class Intro(
+        @JsonProperty("start") val start: Int? = null,
+        @JsonProperty("end") val end: Int? = null
+    )
+    
+    data class Outro(
+        @JsonProperty("start") val start: Int? = null,
+        @JsonProperty("end") val end: Int? = null
     )
 }
