@@ -1,6 +1,5 @@
 package com.animesuge.provider
 
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
@@ -183,58 +182,97 @@ class AnimeSuge : MainAPI() {
             for (server in servers) {
                 val dataLinkId = server.attr("data-link-id")
                 if (dataLinkId.isNotBlank()) {
-                    // AnimeSuge uses MegaPlay - try different server patterns
+                    // Check if this is a sub or dub server
+                    val serverClass = server.attr("class") ?: ""
+                    val serverText = server.text().lowercase()
+                    val isDub = serverClass.contains("dub", ignoreCase = true) || 
+                               serverText.contains("dub")
+                    
+                    val language = if (isDub) "dub" else "sub"
+                    
+                    // Try different server numbers (s-1 through s-4)
                     val serverPatterns = listOf("s-1", "s-2", "s-3", "s-4")
                     for (serverNum in serverPatterns) {
-                        val megaUrl = "https://megaplay.buzz/stream/$serverNum/$dataLinkId?autostart=true"
-                        if (loadExtractor(megaUrl, subtitleCallback, callback)) {
+                        // Try with language parameter
+                        val megaUrlWithLang = "https://megaplay.buzz/stream/$serverNum/$dataLinkId/$language?autostart=true"
+                        if (loadExtractor(megaUrlWithLang, subtitleCallback, callback)) {
                             return true
                         }
-                    }
-                    
-                    // Try direct MegaPlay API
-                    val megaApiUrl = "https://megaplay.buzz/stream/getSources?id=$dataLinkId"
-                    if (loadExtractor(megaApiUrl, subtitleCallback, callback)) {
-                        return true
+                        
+                        // Try without language parameter
+                        val megaUrlNoLang = "https://megaplay.buzz/stream/$serverNum/$dataLinkId?autostart=true"
+                        if (loadExtractor(megaUrlNoLang, subtitleCallback, callback)) {
+                            return true
+                        }
                     }
                 }
             }
             
-            // Method 2: Look for iframe
+            // Method 2: Try to find episode ID from scripts
+            val scripts = document.select("script")
+            for (script in scripts) {
+                val scriptText = script.html()
+                
+                // Look for episode ID pattern
+                val epIdPattern = Regex("""episodeId['"]?\s*:\s*['"]?(\d+)['"]?""")
+                val epIdMatch = epIdPattern.find(scriptText)
+                if (epIdMatch != null) {
+                    val episodeId = epIdMatch.groupValues[1]
+                    
+                    // Try with both sub and dub
+                    val languages = listOf("sub", "dub")
+                    val serverPatterns = listOf("s-1", "s-2", "s-3", "s-4")
+                    
+                    for (serverNum in serverPatterns) {
+                        for (language in languages) {
+                            val megaUrl = "https://megaplay.buzz/stream/$serverNum/$episodeId/$language?autostart=true"
+                            if (loadExtractor(megaUrl, subtitleCallback, callback)) {
+                                return true
+                            }
+                            
+                            // Also try without language
+                            val megaUrlNoLang = "https://megaplay.buzz/stream/$serverNum/$episodeId?autostart=true"
+                            if (loadExtractor(megaUrlNoLang, subtitleCallback, callback)) {
+                                return true
+                            }
+                        }
+                    }
+                }
+                
+                // Look for data-link-id in scripts
+                val linkIdPattern = Regex("""['"]data-link-id['"]\s*:\s*['"]([^'"]+)['"]""")
+                val linkIdMatch = linkIdPattern.find(scriptText)
+                if (linkIdMatch != null) {
+                    val dataLinkId = linkIdMatch.groupValues[1]
+                    
+                    // Try with both sub and dub
+                    val languages = listOf("sub", "dub")
+                    val serverPatterns = listOf("s-1", "s-2", "s-3", "s-4")
+                    
+                    for (serverNum in serverPatterns) {
+                        for (language in languages) {
+                            val megaUrl = "https://megaplay.buzz/stream/$serverNum/$dataLinkId/$language?autostart=true"
+                            if (loadExtractor(megaUrl, subtitleCallback, callback)) {
+                                return true
+                            }
+                            
+                            // Also try without language
+                            val megaUrlNoLang = "https://megaplay.buzz/stream/$serverNum/$dataLinkId?autostart=true"
+                            if (loadExtractor(megaUrlNoLang, subtitleCallback, callback)) {
+                                return true
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Method 3: Look for iframe (fallback)
             val iframe = document.selectFirst("iframe[src]")
             val iframeSrc = iframe?.attr("src")?.takeIf { it.isNotBlank() }
                 ?.let { if (it.startsWith("http")) it else "https:$it" }
             
             if (iframeSrc != null && loadExtractor(iframeSrc, subtitleCallback, callback)) {
                 return true
-            }
-            
-            // Method 3: Look for video player scripts
-            val scripts = document.select("script")
-            for (script in scripts) {
-                val scriptText = script.html()
-                
-                // Look for MegaPlay pattern
-                val megaPattern = Regex("""megaplay\.buzz/stream/([^"'\s?]+)""")
-                val matches = megaPattern.findAll(scriptText)
-                
-                for (match in matches) {
-                    val megaUrl = "https://${match.value}"
-                    if (loadExtractor(megaUrl, subtitleCallback, callback)) {
-                        return true
-                    }
-                }
-                
-                // Look for data-link-id in scripts
-                val linkIdPattern = Regex("""data-link-id['"]?\s*:\s*['"]([^'"]+)['"]""")
-                val linkIdMatch = linkIdPattern.find(scriptText)
-                if (linkIdMatch != null) {
-                    val dataLinkId = linkIdMatch.groupValues[1]
-                    val megaUrl = "https://megaplay.buzz/stream/s-1/$dataLinkId?autostart=true"
-                    if (loadExtractor(megaUrl, subtitleCallback, callback)) {
-                        return true
-                    }
-                }
             }
             
             false
