@@ -2,10 +2,11 @@ package com.animesuge.provider
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
 class AnimeSuge : MainAPI() {
-    override var mainUrl = "https://animesuge.io" // Updated domain
+    override var mainUrl = "https://animesuge.to" // or .bz or .io
     override var name = "AnimeSuge"
     override val hasMainPage = true
     override var lang = "en"
@@ -80,7 +81,7 @@ class AnimeSuge : MainAPI() {
             val rangeContainer = document.selectFirst(".range[data-range]")
             
             if (rangeContainer != null) {
-                val episodeLinks = rangeContainer.select("a[href*='/watch/'][href*='/ep-']")
+                val episodeLinks = rangeContainer.select("div > a[href*='/watch/'][href*='/ep-']")
                 for (ep in episodeLinks) {
                     try {
                         val episodeUrl = fixUrl(ep.attr("href"))
@@ -90,10 +91,11 @@ class AnimeSuge : MainAPI() {
                             ?: "Episode $episodeNumber"
                         
                         episodes.add(
-                            newEpisode(episodeUrl) {
-                                name = episodeName
-                                this.episode = episodeNumber
-                            }
+                            Episode(
+                                data = episodeUrl,
+                                name = episodeName,
+                                episode = episodeNumber
+                            )
                         )
                     } catch (e: Exception) {
                         // Skip episode errors
@@ -108,21 +110,33 @@ class AnimeSuge : MainAPI() {
                 episodes.isEmpty()
             
             if (isMovie) {
-                newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
-                    this.posterUrl = poster
-                    this.plot = plot
-                }
+                MovieLoadResponse(
+                    title,
+                    url,
+                    TvType.AnimeMovie,
+                    url,
+                    posterUrl = poster,
+                    plot = plot
+                )
             } else {
-                newTvSeriesLoadResponse(title, url, TvType.Anime, episodes.sortedBy { it.episode }) {
-                    this.posterUrl = poster
-                    this.plot = plot
-                }
+                TvSeriesLoadResponse(
+                    title,
+                    url,
+                    TvType.Anime,
+                    episodes.sortedBy { it.episode },
+                    posterUrl = poster,
+                    plot = plot
+                )
             }
             
         } catch (e: Exception) {
-            newMovieLoadResponse("Error", url, TvType.AnimeMovie, url) {
-                this.plot = "Failed to load: ${e.message}"
-            }
+            MovieLoadResponse(
+                "Error",
+                url,
+                TvType.AnimeMovie,
+                url,
+                plot = "Failed to load: ${e.message}"
+            )
         }
     }
 
@@ -142,7 +156,7 @@ class AnimeSuge : MainAPI() {
                 for (server in servers) {
                     val dataLinkId = server.attr("data-link-id")
                     if (dataLinkId.isNotBlank()) {
-                        // Try Megaplay URL patterns (similar to HiAnime)
+                        // Try Megaplay URL patterns
                         val serverPatterns = listOf("s-1", "s-2", "s-3", "s-4")
                         for (serverNum in serverPatterns) {
                             val megaUrl = "https://megaplay.buzz/stream/$serverNum/$dataLinkId?autostart=true"
