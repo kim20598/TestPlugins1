@@ -12,6 +12,14 @@ class KooraLite : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie)
 
+    private fun decodeBase64(encoded: String): String {
+        return try {
+            String(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT))
+        } catch (e: Exception) {
+            encoded
+        }
+    }
+
     private fun Element.toMatchSearchResponse(): SearchResponse? {
         // Extract match information from .AY_Match div
         val link = selectFirst("a")?.attr("href") ?: return null
@@ -289,7 +297,8 @@ class KooraLite : MainAPI() {
 
         // Method 2: Check if URL is already a stream link
         if (actualUrl.contains("stream-in.live") || actualUrl.contains("stream") ||
-            actualUrl.contains("albaplayer") || actualUrl.contains("max.mpnh.online")
+            actualUrl.contains("albaplayer") || actualUrl.contains("max.mpnh.online") ||
+            actualUrl.contains("sia.watch")
         ) {
             rawStreamLinks.add(actualUrl)
         }
@@ -416,6 +425,108 @@ class KooraLite : MainAPI() {
         }
     }
 
+    private suspend fun extractAlbaPlayerStream(
+        url: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        try {
+            val doc = app.get(url, referer = referer).document
+            
+            // Look for the AlbaPlayerControl script
+            doc.select("script:contains(AlbaPlayerControl)").forEach { script ->
+                val scriptText = script.html()
+                
+                // Extract the base64 encoded string
+                val regex = Regex("""AlbaPlayerControl\('([^']+)'""")
+                val match = regex.find(scriptText)
+                
+                if (match != null) {
+                    val base64String = match.groupValues[1]
+                    val decodedUrl = decodeBase64(base64String)
+                    
+                    if (decodedUrl.isNotBlank()) {
+                        // The decoded URL is likely an m3u8 or similar stream URL
+                        val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
+                        
+                        callback.invoke(
+                            newExtractorLink(
+                                name,
+                                "$name - بث مباشر",
+                                streamUrl,
+                                ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = url
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
+                        return true
+                    }
+                }
+            }
+            
+            // Also look for video source directly
+            doc.select("video source[src]").forEach { source ->
+                val videoUrl = fixUrl(source.attr("src"))
+                if (videoUrl.isNotBlank()) {
+                    callback.invoke(
+                        newExtractorLink(
+                            name,
+                            "$name - بث مباشر",
+                            videoUrl,
+                            if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = url
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
+                    return true
+                }
+            }
+            
+            // Look for HLS.js initialization
+            doc.select("script").forEach { script ->
+                val scriptText = script.html()
+                val hlsPatterns = listOf(
+                    Regex("""['"](https?://[^'"]*\.m3u8[^'"]*)['"]"""),
+                    Regex("""src\s*:\s*['"](https?://[^'"]+\.m3u8)['"]"""),
+                    Regex("""hls\.loadSource\s*\(\s*['"]([^'"]+)['"]""")
+                )
+                
+                hlsPatterns.forEach { pattern ->
+                    pattern.findAll(scriptText).forEach { match ->
+                        val streamUrl = match.groupValues[1]
+                        if (streamUrl.isNotBlank()) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    name,
+                                    "$name - بث مباشر",
+                                    streamUrl,
+                                    ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = url
+                                    this.quality = Qualities.Unknown.value
+                                }
+                            )
+                            return true
+                        }
+                    }
+                }
+            }
+            
+        } catch (e: Exception) {
+            // If extraction fails, try to load the URL directly
+            try {
+                loadExtractor(url, referer, subtitleCallback, callback)
+                return true
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+        return false
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -430,8 +541,12 @@ class KooraLite : MainAPI() {
 
             streamLinks.forEach { streamUrl ->
                 try {
-                    // Check if it's a YouTube URL first
-                    if (isYouTubeUrl(streamUrl)) {
+                    // Check for albaplayer URLs first
+                    if (streamUrl.contains("albaplayer") || streamUrl.contains("sia.watch")) {
+                        foundLinks = extractAlbaPlayerStream(streamUrl, mainUrl, subtitleCallback, callback) || foundLinks
+                    }
+                    // Check if it's a YouTube URL
+                    else if (isYouTubeUrl(streamUrl)) {
                         foundLinks = extractYouTubeStream(streamUrl, subtitleCallback, callback) || foundLinks
                     } else {
                         loadExtractor(streamUrl, mainUrl, subtitleCallback, callback)
@@ -445,11 +560,18 @@ class KooraLite : MainAPI() {
         } else {
             // Single URL - try to extract from the page
             val dataUrl = fixUrl(data)
+            
+            // Check for albaplayer URLs first
+            if (dataUrl.contains("albaplayer") || dataUrl.contains("sia.watch")) {
+                foundLinks = extractAlbaPlayerStream(dataUrl, mainUrl, subtitleCallback, callback)
+                if (foundLinks) return true
+            }
+            
             try {
                 val doc = app.get(dataUrl).document
 
                 // First look for alkoora.live iframes (the main stream iframe)
-                doc.select("iframe[src*='alkoora.live'], iframe[src*='stream-in.live']").forEach { iframe ->
+                doc.select("iframe[src*='alkoora.live'], iframe[src*='stream-in.live'], iframe[src*='albaplayer']").forEach { iframe ->
                     val src = fixUrl(iframe.attr("src"))
                     if (src.isNotBlank()) {
                         // Extract from the iframe
@@ -469,7 +591,7 @@ class KooraLite : MainAPI() {
                 doc.select("iframe[src]").forEach { iframe ->
                     val src = fixUrl(iframe.attr("src"))
                     if (src.isNotBlank() && !src.contains("alkoora.live") && !src.contains("stream-in.live") &&
-                        !src.contains("youtube.com") && !src.contains("youtu.be")
+                        !src.contains("youtube.com") && !src.contains("youtu.be") && !src.contains("albaplayer")
                     ) {
                         loadExtractor(src, dataUrl, subtitleCallback, callback)
                         foundLinks = true
@@ -546,11 +668,16 @@ class KooraLite : MainAPI() {
 
         // If still no links found, check if URL is from stream-in.live or albaplayer
         if (!foundLinks && (data.contains("stream-in.live") || data.contains("/2025/") ||
-                    data.contains("albaplayer") || data.contains("max.mpnh.online"))
+                    data.contains("albaplayer") || data.contains("max.mpnh.online") ||
+                    data.contains("sia.watch"))
         ) {
             try {
-                loadExtractor(fixUrl(data), mainUrl, subtitleCallback, callback)
-                foundLinks = true
+                // Try albaplayer extraction first
+                foundLinks = extractAlbaPlayerStream(fixUrl(data), mainUrl, subtitleCallback, callback)
+                if (!foundLinks) {
+                    loadExtractor(fixUrl(data), mainUrl, subtitleCallback, callback)
+                    foundLinks = true
+                }
             } catch (e: Exception) {
                 // Ignore
             }
@@ -571,6 +698,12 @@ class KooraLite : MainAPI() {
 
         try {
             val iframeDoc = app.get(srcFixed, referer = referer).document
+
+            // Check for albaplayer in iframe
+            if (srcFixed.contains("albaplayer") || srcFixed.contains("sia.watch")) {
+                foundLinks = extractAlbaPlayerStream(srcFixed, referer, subtitleCallback, callback)
+                if (foundLinks) return true
+            }
 
             // Method 1: Look for video elements in iframe
             iframeDoc.select("video source[src]").forEach { source ->
