@@ -5,8 +5,8 @@ import com.lagradost.cloudstream3.utils.*
 import java.net.URLEncoder
 
 class AnimeSuge : MainAPI() {
-    override var mainUrl = "https://animesuge.bz"
-    override var name = "Animesuge"
+    override var mainUrl = "https://animesuge.io" // Updated domain
+    override var name = "AnimeSuge"
     override val hasMainPage = true
     override var lang = "en"
     override val supportedTypes = setOf(
@@ -15,13 +15,26 @@ class AnimeSuge : MainAPI() {
         TvType.OVA
     )
 
-    override val mainPage = listOf(
-        MainPageData("Recently Updated", "$mainUrl/latest-updated", true),
-        MainPageData("New Releases", "$mainUrl/new-release", true),
-        MainPageData("Popular Anime", "$mainUrl/most-viewed", true),
-        MainPageData("Completed", "$mainUrl/status/finished-airing", true),
-        MainPageData("Ongoing", "$mainUrl/status/currently-airing", true)
+    override val mainPage = mainPageOf(
+        "$mainUrl/latest-updated" to "Recently Updated",
+        "$mainUrl/new-release" to "New Releases",
+        "$mainUrl/most-viewed" to "Popular Anime",
+        "$mainUrl/status/finished-airing" to "Completed",
+        "$mainUrl/status/currently-airing" to "Ongoing"
     )
+
+    private fun Element.toSearchResult(): SearchResponse? {
+        val title = this.selectFirst(".name, .detail .name, .item-bottom .name, span")?.text()?.trim() ?: return null
+        val href = fixUrl(this.selectFirst("a[href]")?.attr("href") ?: this.attr("href"))
+        val posterUrl = fixUrlNull(
+            this.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() }
+            ?: this.selectFirst("img")?.attr("data-src")
+        )?.let { if (it.startsWith("http")) it else "$mainUrl$it" }
+        
+        return newAnimeSearchResponse(title, href) {
+            this.posterUrl = posterUrl
+        }
+    }
 
     override suspend fun getMainPage(
         page: Int,
@@ -31,78 +44,10 @@ class AnimeSuge : MainAPI() {
             val url = request.data + if (page > 1) "?page=$page" else ""
             val document = app.get(url).document
             
-            val home = mutableListOf<SearchResponse>()
+            val home = document.select(".anime-card .item, .anime.main-card .item, .anime.mini-card .item, a.item[href*='/watch/']")
+                .mapNotNull { it.toSearchResult() }
             
-            val selectors = listOf(
-                ".anime.main-card .item",
-                ".anime.mini-card .item",
-                ".anime-card .item",
-                "a.item[href*='/watch/']",
-                ".swiper-slide[href*='/watch/']",
-                ".original.anime.main-card .item"
-            )
-            
-            for (selector in selectors) {
-                val items = document.select(selector)
-                if (items.isNotEmpty()) {
-                    for (item in items) {
-                        try {
-                            val titleElement = item.selectFirst(".name, .detail .name, .item-bottom .name, span, .swiper-inner span")
-                            val title = titleElement?.text()?.trim() ?: continue
-                            
-                            val href = item.attr("href").takeIf { it.isNotBlank() } 
-                                ?: item.selectFirst("a[href]")?.attr("href")
-                                ?: continue
-                            
-                            val fullUrl = if (href.startsWith("http")) href else "$mainUrl$href"
-                            if (!fullUrl.contains("/watch/")) continue
-                            
-                            val image = item.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() }?.let { img ->
-                                if (img.startsWith("http")) img else "$mainUrl$img"
-                            } ?: item.selectFirst("img")?.attr("data-src")?.takeIf { it.isNotBlank() }?.let { img ->
-                                if (img.startsWith("http")) img else "$mainUrl$img"
-                            }
-                            
-                            home.add(
-                                newAnimeSearchResponse(title, fullUrl) {
-                                    this.posterUrl = image
-                                }
-                            )
-                        } catch (e: Exception) {
-                            // Skip individual item errors
-                        }
-                    }
-                    break
-                }
-            }
-            
-            if (home.isEmpty()) {
-                val allLinks = document.select("a[href*='/watch/']")
-                for (link in allLinks) {
-                    try {
-                        val title = link.attr("title").takeIf { it.isNotBlank() }
-                            ?: link.text().trim().takeIf { it.isNotBlank() }
-                            ?: continue
-                        
-                        val href = link.attr("href")
-                        val fullUrl = if (href.startsWith("http")) href else "$mainUrl$href"
-                        
-                        val image = link.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() }?.let { img ->
-                            if (img.startsWith("http")) img else "$mainUrl$img"
-                        }
-                        
-                        home.add(
-                            newAnimeSearchResponse(title, fullUrl) {
-                                this.posterUrl = image
-                            }
-                        )
-                    } catch (e: Exception) {
-                        // Skip individual link errors
-                    }
-                }
-            }
-            
-            return newHomePageResponse(request.name, home.distinctBy { it.url })
+            return newHomePageResponse(request.name, home, hasNext = true)
         } catch (e: Exception) {
             return newHomePageResponse(request.name, emptyList())
         }
@@ -113,45 +58,9 @@ class AnimeSuge : MainAPI() {
             val encodedQuery = URLEncoder.encode(query, "UTF-8")
             val document = app.get("$mainUrl/filter?keyword=$encodedQuery").document
             
-            val results = mutableListOf<SearchResponse>()
-            
-            val selectors = listOf(
-                ".anime.main-card .item",
-                ".anime.mini-card .item",
-                ".anime-card .item",
-                "a.item[href*='/watch/']"
-            )
-            
-            for (selector in selectors) {
-                val items = document.select(selector)
-                for (item in items) {
-                    try {
-                        val titleElement = item.selectFirst(".name, .detail .name, .item-bottom .name")
-                        val title = titleElement?.text()?.trim() ?: continue
-                        
-                        val href = item.attr("href").takeIf { it.isNotBlank() } 
-                            ?: item.selectFirst("a[href]")?.attr("href")
-                            ?: continue
-                        
-                        val fullUrl = if (href.startsWith("http")) href else "$mainUrl$href"
-                        if (!fullUrl.contains("/watch/")) continue
-                        
-                        val image = item.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() }?.let { img ->
-                            if (img.startsWith("http")) img else "$mainUrl$img"
-                        }
-                        
-                        results.add(
-                            newAnimeSearchResponse(title, fullUrl) {
-                                this.posterUrl = image
-                            }
-                        )
-                    } catch (e: Exception) {
-                        // Skip individual item errors
-                    }
-                }
-            }
-            
-            results.distinctBy { it.url }
+            document.select(".anime-card .item, .anime.main-card .item, .anime.mini-card .item, a.item[href*='/watch/']")
+                .mapNotNull { it.toSearchResult() }
+                .distinctBy { it.url }
         } catch (e: Exception) {
             emptyList()
         }
@@ -161,34 +70,21 @@ class AnimeSuge : MainAPI() {
         return try {
             val document = app.get(url).document
             
-            val title = document.selectFirst("h1.title, h1, .title")?.text()?.trim() 
-                ?: "Unknown Title"
-            
-            val poster = document.selectFirst("#media-info .poster img, .poster img, [itemprop=image]")?.attr("src")?.let { src ->
-                if (src.startsWith("http")) src else "$mainUrl$src"
-            }
-            
+            val title = document.selectFirst("h1.title, h1, .title")?.text()?.trim() ?: "Unknown Title"
+            val poster = document.selectFirst("#media-info .poster img, .poster img, [itemprop=image]")?.attr("src")
+                ?.let { if (it.startsWith("http")) it else "$mainUrl$it" }
             val plot = document.selectFirst(".description, .plot")?.text()?.trim()
             
-            // EPISODE EXTRACTION
+            // Extract episodes
             val episodes = mutableListOf<Episode>()
-            
-            // Find the range container exactly as in your HTML
             val rangeContainer = document.selectFirst(".range[data-range]")
+            
             if (rangeContainer != null) {
-                // Get episode links
                 val episodeLinks = rangeContainer.select("a[href*='/watch/'][href*='/ep-']")
-                
                 for (ep in episodeLinks) {
                     try {
-                        val episodeUrl = ep.attr("href").takeIf { it.isNotBlank() }?.let { href ->
-                            if (href.startsWith("http")) href else "$mainUrl$href"
-                        } ?: continue
-                        
-                        // Get episode number from data-slug
+                        val episodeUrl = fixUrl(ep.attr("href"))
                         val episodeNumber = ep.attr("data-slug").toIntOrNull() ?: continue
-                        
-                        // Get episode name
                         val episodeName = ep.attr("data-num").takeIf { it.isNotBlank() }
                             ?: ep.attr("title").takeIf { it.isNotBlank() }
                             ?: "Episode $episodeNumber"
@@ -206,10 +102,10 @@ class AnimeSuge : MainAPI() {
             }
             
             // Check if it's a movie
-            val typeElement = document.selectFirst(".meta div:contains(Type) + span")
-            val isMovie = typeElement?.text()?.contains("movie", true) == true || 
-                         url.contains("/movie/") || 
-                         episodes.isEmpty()
+            val isMovie = document.selectFirst(".meta div:contains(Type) + span")
+                ?.text()?.contains("movie", true) == true || 
+                url.contains("/movie/") || 
+                episodes.isEmpty()
             
             if (isMovie) {
                 newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
@@ -224,7 +120,6 @@ class AnimeSuge : MainAPI() {
             }
             
         } catch (e: Exception) {
-            // Return a basic error response
             newMovieLoadResponse("Error", url, TvType.AnimeMovie, url) {
                 this.plot = "Failed to load: ${e.message}"
             }
@@ -239,38 +134,36 @@ class AnimeSuge : MainAPI() {
     ): Boolean {
         return try {
             val document = app.get(data).document
-            var foundLinks = false
             
-            // Look for server wrapper
+            // Method 1: Look for server wrapper
             val serverWrapper = document.selectFirst(".server-wrapper")
             if (serverWrapper != null) {
                 val servers = serverWrapper.select(".server[data-link-id]")
                 for (server in servers) {
                     val dataLinkId = server.attr("data-link-id")
                     if (dataLinkId.isNotBlank()) {
-                        // Try Megaplay URL pattern - SIMILAR TO HiAnime!
-                        val megaUrl = "https://megaplay.buzz/stream/s-4/$dataLinkId?autostart=true"
-                        if (loadExtractor(megaUrl, subtitleCallback, callback)) {
-                            foundLinks = true
-                            break
+                        // Try Megaplay URL patterns (similar to HiAnime)
+                        val serverPatterns = listOf("s-1", "s-2", "s-3", "s-4")
+                        for (serverNum in serverPatterns) {
+                            val megaUrl = "https://megaplay.buzz/stream/$serverNum/$dataLinkId?autostart=true"
+                            if (loadExtractor(megaUrl, subtitleCallback, callback)) {
+                                return true
+                            }
                         }
                     }
                 }
             }
             
-            // Try iframe as fallback
-            if (!foundLinks) {
-                val iframe = document.selectFirst("iframe[src]")
-                val iframeSrc = iframe?.attr("src")?.takeIf { it.isNotBlank() }?.let { src ->
-                    if (src.startsWith("http")) src else "https:$src"
-                }
-                if (iframeSrc != null) {
-                    foundLinks = loadExtractor(iframeSrc, subtitleCallback, callback)
-                }
+            // Method 2: Look for iframe
+            val iframe = document.selectFirst("iframe[src]")
+            val iframeSrc = iframe?.attr("src")?.takeIf { it.isNotBlank() }
+                ?.let { if (it.startsWith("http")) it else "https:$it" }
+            
+            if (iframeSrc != null && loadExtractor(iframeSrc, subtitleCallback, callback)) {
+                return true
             }
             
-            foundLinks
-            
+            false
         } catch (e: Exception) {
             false
         }
