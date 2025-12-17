@@ -7,7 +7,7 @@ import java.net.URLEncoder
 
 class AnimeSuge : MainAPI() {
     override var mainUrl = "https://animesuge.to"
-    override var name = "Animesuge"
+    override var name = "AnimeSuge"
     override val hasMainPage = true
     override var lang = "en"
     override val supportedTypes = setOf(
