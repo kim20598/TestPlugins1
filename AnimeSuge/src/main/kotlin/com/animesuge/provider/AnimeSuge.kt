@@ -320,16 +320,60 @@ class AnimeSuge : MainAPI() {
             val episodeDoc = app.get(episodeUrl).document
             var foundSources = false
             
-            // Method 1: Look for iframe sources
+            // Method 1: Look for active server iframe
+            val activeServer = episodeDoc.select(".server.active")
+            if (activeServer.isNotEmpty()) {
+                // Look for iframe inside or related to the active server
+                val iframe = episodeDoc.select("iframe[src]").firstOrNull()
+                if (iframe != null) {
+                    val iframeSrc = iframe.attr("abs:src")
+                    if (iframeSrc.isNotBlank()) {
+                        foundSources = loadExtractor(iframeSrc, subtitleCallback, callback) || foundSources
+                    }
+                }
+            }
+            
+            // Method 2: Look for server list with data-link-id
+            val serverElements = episodeDoc.select(".server, .server-list .server")
+            for (server in serverElements) {
+                // Get server name from span or div text
+                val serverName = server.select("span, div").text().trim()
+                    .takeIf { it.isNotBlank() } ?: "Unknown Server"
+                
+                // Check for data-link-id attribute
+                val dataLinkId = server.attr("data-link-id")
+                if (dataLinkId.isNotBlank()) {
+                    // Try to construct URL from data-link-id or use it directly
+                    val videoUrl = when {
+                        dataLinkId.startsWith("http") -> dataLinkId
+                        serverName.contains("megaplay", true) -> {
+                            // Handle Megaplay URLs
+                            "https://megaplay.buzz/stream/s-1/$dataLinkId"
+                        }
+                        serverName.contains("kiwi", true) -> {
+                            // Handle Kiwi Stream URLs - these might be base64 encoded
+                            // You might need to decode or process these differently
+                            "https://kiwistream.pro/player/$dataLinkId"
+                        }
+                        else -> null
+                    }
+                    
+                    if (videoUrl != null) {
+                        foundSources = loadExtractor(videoUrl, subtitleCallback, callback) || foundSources
+                    }
+                }
+            }
+            
+            // Method 3: Look for direct iframe sources as fallback
             val iframes = episodeDoc.select("iframe[src]")
             for (iframe in iframes) {
                 val iframeSrc = iframe.attr("abs:src")
-                if (iframeSrc.isNotBlank()) {
+                if (iframeSrc.isNotBlank() && !foundSources) {
                     foundSources = loadExtractor(iframeSrc, subtitleCallback, callback) || foundSources
                 }
             }
             
-            // Method 2: Look for video elements with data
+            // Method 4: Look for video elements with data
             val videoElements = episodeDoc.select("video source[src], video[src]")
             for (videoSource in videoElements) {
                 val src = videoSource.attr("abs:src").ifBlank { 
@@ -355,7 +399,7 @@ class AnimeSuge : MainAPI() {
                 }
             }
             
-            // Method 3: Look for script with video data
+            // Method 5: Look for script with video data
             val scripts = episodeDoc.select("script")
             for (script in scripts) {
                 val scriptText = script.html()
@@ -388,6 +432,18 @@ class AnimeSuge : MainAPI() {
                             )
                             foundSources = true
                         }
+                    }
+                }
+                
+                // Look for data-link-id in scripts
+                val linkIdPattern = Regex("""data-link-id\s*:\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                val linkIdMatches = linkIdPattern.findAll(scriptText)
+                for (match in linkIdMatches) {
+                    val linkId = match.groupValues[1]
+                    if (linkId.isNotBlank()) {
+                        // Try to construct URL from link ID
+                        val videoUrl = "https://megaplay.buzz/stream/s-1/$linkId"
+                        foundSources = loadExtractor(videoUrl, subtitleCallback, callback) || foundSources
                     }
                 }
             }
