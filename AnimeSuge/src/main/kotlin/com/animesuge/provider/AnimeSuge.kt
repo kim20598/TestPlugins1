@@ -1,12 +1,13 @@
 package com.animesuge.provider
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
 class AnimeSuge : MainAPI() {
-    override var mainUrl = "https://animesuge.bz" // or .bz or .io
+    override var mainUrl = "https://animesuge.bz"
     override var name = "AnimeSuge"
     override val hasMainPage = true
     override var lang = "en"
@@ -25,8 +26,8 @@ class AnimeSuge : MainAPI() {
     )
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst(".name, .detail .name, .item-bottom .name, span")?.text()?.trim() ?: return null
-        val href = fixUrl(this.selectFirst("a[href]")?.attr("href") ?: this.attr("href"))
+        val title = this.selectFirst(".name, .detail .name, h3, h4")?.text()?.trim() ?: return null
+        val href = fixUrl(this.selectFirst("a")?.attr("href") ?: return null)
         val posterUrl = fixUrlNull(
             this.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() }
             ?: this.selectFirst("img")?.attr("data-src")
@@ -45,11 +46,30 @@ class AnimeSuge : MainAPI() {
             val url = request.data + if (page > 1) "?page=$page" else ""
             val document = app.get(url).document
             
-            val home = document.select(".anime-card .item, .anime.main-card .item, .anime.mini-card .item, a.item[href*='/watch/']")
-                .mapNotNull { it.toSearchResult() }
+            // Try different selectors
+            val selectors = listOf(
+                ".item",
+                ".anime-card",
+                ".card",
+                ".anime-poster",
+                ".poster",
+                "article",
+                "a[href*='/watch/']:has(img)"
+            )
             
-            return newHomePageResponse(request.name, home, hasNext = true)
+            val home = mutableListOf<SearchResponse>()
+            
+            for (selector in selectors) {
+                val items = document.select(selector)
+                if (items.isNotEmpty()) {
+                    home.addAll(items.mapNotNull { it.toSearchResult() })
+                    break
+                }
+            }
+            
+            return newHomePageResponse(request.name, home.distinctBy { it.url }, hasNext = true)
         } catch (e: Exception) {
+            e.printStackTrace()
             return newHomePageResponse(request.name, emptyList())
         }
     }
@@ -59,7 +79,7 @@ class AnimeSuge : MainAPI() {
             val encodedQuery = URLEncoder.encode(query, "UTF-8")
             val document = app.get("$mainUrl/filter?keyword=$encodedQuery").document
             
-            document.select(".anime-card .item, .anime.main-card .item, .anime.mini-card .item, a.item[href*='/watch/']")
+            document.select(".item, .anime-card, .card, .anime-poster, .poster, article")
                 .mapNotNull { it.toSearchResult() }
                 .distinctBy { it.url }
         } catch (e: Exception) {
@@ -72,43 +92,81 @@ class AnimeSuge : MainAPI() {
             val document = app.get(url).document
             
             val title = document.selectFirst("h1.title, h1, .title")?.text()?.trim() ?: "Unknown Title"
-            val poster = document.selectFirst("#media-info .poster img, .poster img, [itemprop=image]")?.attr("src")
+            val poster = document.selectFirst(".poster img, [itemprop=image], .cover img")?.attr("src")
                 ?.let { if (it.startsWith("http")) it else "$mainUrl$it" }
-            val plot = document.selectFirst(".description, .plot")?.text()?.trim()
+            val plot = document.selectFirst(".description, .plot, .summary")?.text()?.trim()
             
-            // Extract episodes
-            val episodes = mutableListOf<Episode>()
-            val rangeContainer = document.selectFirst(".range[data-range]")
+            // Extract anime ID from the page
+            val dataId = document.selectFirst("[data-id]")?.attr("data-id")?.toIntOrNull()
+            val isMovie = document.selectFirst(".meta div:contains(Type) + span")
+                ?.text()?.contains("movie", true) == true
             
-            if (rangeContainer != null) {
-                val episodeLinks = rangeContainer.select("div > a[href*='/watch/'][href*='/ep-']")
-                for (ep in episodeLinks) {
-                    try {
-                        val episodeUrl = fixUrl(ep.attr("href"))
-                        val episodeNumber = ep.attr("data-slug").toIntOrNull() ?: continue
-                        val episodeName = ep.attr("data-num").takeIf { it.isNotBlank() }
-                            ?: ep.attr("title").takeIf { it.isNotBlank() }
-                            ?: "Episode $episodeNumber"
-                        
-                        episodes.add(
-                            newEpisode(episodeUrl) {
-                                name = episodeName
-                                this.episode = episodeNumber
+            var episodes: List<Episode> = emptyList()
+            
+            // Try to get episodes via API
+            if (!isMovie && dataId != null) {
+                episodes = try {
+                    // Try to get episodes from API
+                    val apiUrl = "$mainUrl/api/seasons/$dataId"
+                    val apiResponse = app.get(apiUrl).parsedSafe<ApiResponse>()
+                    
+                    if (apiResponse?.status == 200 && apiResponse.result?.isNotBlank() == true) {
+                        // Parse HTML from API response
+                        val episodesDoc = app.parse(apiResponse.result)
+                        episodesDoc.select("a[href*='/watch/'][href*='/ep-']").mapNotNull { ep ->
+                            try {
+                                val episodeUrl = fixUrl(ep.attr("href"))
+                                val episodeNumber = ep.attr("data-slug").toIntOrNull()
+                                    ?: ep.text().trim().filter { it.isDigit() }.toIntOrNull()
+                                    ?: return@mapNotNull null
+                                
+                                val episodeName = ep.attr("data-num").takeIf { it.isNotBlank() }
+                                    ?: ep.attr("title").takeIf { it.isNotBlank() }
+                                    ?: "Episode $episodeNumber"
+                                
+                                newEpisode(episodeUrl) {
+                                    name = episodeName
+                                    this.episode = episodeNumber
+                                }
+                            } catch (e: Exception) {
+                                null
                             }
-                        )
-                    } catch (e: Exception) {
-                        // Skip episode errors
+                        }
+                    } else {
+                        // Fallback: try to find episodes in the page
+                        document.select("a[href*='/watch/'][href*='/ep-']").mapNotNull { ep ->
+                            try {
+                                val episodeUrl = fixUrl(ep.attr("href"))
+                                val episodeNumber = ep.attr("data-slug").toIntOrNull()
+                                    ?: ep.text().trim().filter { it.isDigit() }.toIntOrNull()
+                                    ?: return@mapNotNull null
+                                
+                                val episodeName = ep.attr("data-num").takeIf { it.isNotBlank() }
+                                    ?: ep.attr("title").takeIf { it.isNotBlank() }
+                                    ?: "Episode $episodeNumber"
+                                
+                                newEpisode(episodeUrl) {
+                                    name = episodeName
+                                    this.episode = episodeNumber
+                                }
+                            } catch (e: Exception) {
+                                null
+                            }
+                        }
                     }
+                } catch (e: Exception) {
+                    emptyList()
                 }
             }
             
-            // Check if it's a movie
-            val isMovie = document.selectFirst(".meta div:contains(Type) + span")
-                ?.text()?.contains("movie", true) == true || 
-                url.contains("/movie/") || 
-                episodes.isEmpty()
+            // Determine if it's a movie or series
+            val type = if (isMovie || episodes.isEmpty()) {
+                TvType.AnimeMovie
+            } else {
+                TvType.Anime
+            }
             
-            if (isMovie) {
+            if (type == TvType.AnimeMovie) {
                 newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
                     this.posterUrl = poster
                     this.plot = plot
@@ -121,6 +179,7 @@ class AnimeSuge : MainAPI() {
             }
             
         } catch (e: Exception) {
+            e.printStackTrace()
             newMovieLoadResponse("Error", url, TvType.AnimeMovie, url) {
                 this.plot = "Failed to load: ${e.message}"
             }
@@ -136,26 +195,31 @@ class AnimeSuge : MainAPI() {
         return try {
             val document = app.get(data).document
             
-            // Method 1: Look for server wrapper
-            val serverWrapper = document.selectFirst(".server-wrapper")
-            if (serverWrapper != null) {
-                val servers = serverWrapper.select(".server[data-link-id]")
-                for (server in servers) {
-                    val dataLinkId = server.attr("data-link-id")
-                    if (dataLinkId.isNotBlank()) {
-                        // Try Megaplay URL patterns
-                        val serverPatterns = listOf("s-1", "s-2", "s-3", "s-4")
-                        for (serverNum in serverPatterns) {
-                            val megaUrl = "https://megaplay.buzz/stream/$serverNum/$dataLinkId?autostart=true"
-                            if (loadExtractor(megaUrl, subtitleCallback, callback)) {
-                                return true
-                            }
+            // Try to extract server data from the page
+            val serversScript = document.select("script").find { script ->
+                script.html().contains("data-link-id")
+            }
+            
+            if (serversScript != null) {
+                val scriptText = serversScript.html()
+                // Look for data-link-id pattern
+                val linkIdRegex = Regex("data-link-id=['\"]([^'\"]+)['\"]")
+                val match = linkIdRegex.find(scriptText)
+                
+                if (match != null) {
+                    val dataLinkId = match.groupValues[1]
+                    // Try different server patterns
+                    val serverPatterns = listOf("s-1", "s-2", "s-3", "s-4")
+                    for (serverNum in serverPatterns) {
+                        val megaUrl = "https://megaplay.buzz/stream/$serverNum/$dataLinkId?autostart=true"
+                        if (loadExtractor(megaUrl, subtitleCallback, callback)) {
+                            return true
                         }
                     }
                 }
             }
             
-            // Method 2: Look for iframe
+            // Look for iframe
             val iframe = document.selectFirst("iframe[src]")
             val iframeSrc = iframe?.attr("src")?.takeIf { it.isNotBlank() }
                 ?.let { if (it.startsWith("http")) it else "https:$it" }
@@ -166,7 +230,13 @@ class AnimeSuge : MainAPI() {
             
             false
         } catch (e: Exception) {
+            e.printStackTrace()
             false
         }
     }
+    
+    data class ApiResponse(
+        @JsonProperty("status") val status: Int? = null,
+        @JsonProperty("result") val result: String? = null
+    )
 }
