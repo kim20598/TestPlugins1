@@ -170,25 +170,28 @@ class AnimeSuge : MainAPI() {
             
             val plot = document.selectFirst(".description, .plot")?.text()?.trim()
             
-            // SIMPLE EPISODE EXTRACTION - BACK TO ORIGINAL
+            // FIXED EPISODE EXTRACTION BASED ON YOUR HTML
             val episodes = mutableListOf<Episode>()
             
-            val rangeContainer = document.selectFirst(".range, #media-episode .range, .range-wrap .range")
+            // Look for episodes in the range container
+            val rangeContainer = document.selectFirst(".range[data-range]")
             if (rangeContainer != null) {
-                val episodeLinks = rangeContainer.select("a[href*='/watch/'], a[href*='/ep-']")
+                // Get all episode links inside the range container
+                val episodeLinks = rangeContainer.select("div > a[href*='/watch/'][href*='/ep-']")
+                
                 for (ep in episodeLinks) {
                     try {
                         val episodeUrl = ep.attr("href").takeIf { it.isNotBlank() }?.let { href ->
                             if (href.startsWith("http")) href else "$mainUrl$href"
                         } ?: continue
                         
+                        // Use data-slug for episode number (this is the most reliable)
                         val episodeNumber = ep.attr("data-slug").toIntOrNull()
-                            ?: ep.text().trim().toIntOrNull()
-                            ?: Regex("""ep-(\d+)""").find(episodeUrl)?.groupValues?.get(1)?.toIntOrNull()
                             ?: continue
                         
-                        val episodeName = ep.attr("title").takeIf { it.isNotBlank() }
-                            ?: ep.attr("data-num").takeIf { it.isNotBlank() }
+                        // Get episode title from data-num or title attribute
+                        val episodeName = ep.attr("data-num").takeIf { it.isNotBlank() }
+                            ?: ep.attr("title").takeIf { it.isNotBlank() }
                             ?: "Episode $episodeNumber"
                         
                         episodes.add(
@@ -203,11 +206,21 @@ class AnimeSuge : MainAPI() {
                 }
             }
             
-            // Check if it's a movie
+            // Check for seasons (from your HTML)
+            val hasSeasons = document.select(".swiper-wrapper .swiper-slide[href*='/watch/']").isNotEmpty()
+            
+            // Check if it's explicitly a movie
             val typeElement = document.selectFirst(".meta div:contains(Type) + span")
-            val isMovie = typeElement?.text()?.contains("movie", true) == true || 
-                         url.contains("/movie/") || 
-                         episodes.isEmpty()
+            val isExplicitlyMovie = typeElement?.text()?.contains("movie", true) == true || 
+                                   url.contains("/movie/")
+            
+            // FIXED: Better logic for determining movie vs series
+            val isMovie = when {
+                isExplicitlyMovie -> true
+                episodes.isEmpty() && !hasSeasons -> true  // No episodes AND no seasons = probably movie
+                episodes.size == 1 && !hasSeasons -> true  // Single episode with no seasons = probably movie
+                else -> false  // Has episodes or seasons = TV series
+            }
             
             if (isMovie) {
                 newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
@@ -215,16 +228,18 @@ class AnimeSuge : MainAPI() {
                     this.plot = plot
                 }
             } else {
-                newTvSeriesLoadResponse(title, url, TvType.Anime, episodes.sortedBy { it.episode }) {
+                // Sort episodes by number
+                val sortedEpisodes = episodes.sortedBy { it.episode ?: 0 }
+                newTvSeriesLoadResponse(title, url, TvType.Anime, sortedEpisodes) {
                     this.posterUrl = poster
                     this.plot = plot
                 }
             }
             
         } catch (e: Exception) {
-            // Return a basic error response
-            newMovieLoadResponse("Error", url, TvType.AnimeMovie, url) {
-                this.plot = "Failed to load: ${e.message}"
+            // Default to TV series on error (not movie)
+            newTvSeriesLoadResponse("Error Loading", url, TvType.Anime, emptyList()) {
+                this.plot = "Failed to load anime details. Please try again."
             }
         }
     }
