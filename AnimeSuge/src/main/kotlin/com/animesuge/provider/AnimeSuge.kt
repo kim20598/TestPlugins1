@@ -91,11 +91,10 @@ class AnimeSuge : MainAPI() {
                             ?: "Episode $episodeNumber"
                         
                         episodes.add(
-                            Episode(
-                                data = episodeUrl,
-                                name = episodeName,
-                                episode = episodeNumber
-                            )
+                            newEpisode(episodeUrl) {
+                                name = episodeName
+                                this.episode = episodeNumber
+                            }
                         )
                     } catch (e: Exception) {
                         // Skip episode errors
@@ -110,33 +109,21 @@ class AnimeSuge : MainAPI() {
                 episodes.isEmpty()
             
             if (isMovie) {
-                MovieLoadResponse(
-                    title,
-                    url,
-                    TvType.AnimeMovie,
-                    url,
-                    posterUrl = poster,
-                    plot = plot
-                )
+                newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
+                    this.posterUrl = poster
+                    this.plot = plot
+                }
             } else {
-                TvSeriesLoadResponse(
-                    title,
-                    url,
-                    TvType.Anime,
-                    episodes.sortedBy { it.episode },
-                    posterUrl = poster,
-                    plot = plot
-                )
+                newTvSeriesLoadResponse(title, url, TvType.Anime, episodes.sortedBy { it.episode }) {
+                    this.posterUrl = poster
+                    this.plot = plot
+                }
             }
             
         } catch (e: Exception) {
-            MovieLoadResponse(
-                "Error",
-                url,
-                TvType.AnimeMovie,
-                url,
-                plot = "Failed to load: ${e.message}"
-            )
+            newMovieLoadResponse("Error", url, TvType.AnimeMovie, url) {
+                this.plot = "Failed to load: ${e.message}"
+            }
         }
     }
 
