@@ -434,12 +434,12 @@ class KooraLite : MainAPI() {
         try {
             val doc = app.get(url, referer = referer).document
             
-            // Look for the AlbaPlayerControl script
+            // Look for the AlbaPlayerControl script - FIXED REGEX
             doc.select("script:contains(AlbaPlayerControl)").forEach { script ->
                 val scriptText = script.html()
                 
-                // Extract the base64 encoded string
-                val regex = Regex("""AlbaPlayerControl\('([^']+)'""")
+                // Extract the base64 encoded string - Match: AlbaPlayerControl('BASE64','hls')
+                val regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
                 val match = regex.find(scriptText)
                 
                 if (match != null) {
@@ -447,9 +447,33 @@ class KooraLite : MainAPI() {
                     val decodedUrl = decodeBase64(base64String)
                     
                     if (decodedUrl.isNotBlank()) {
-                        // The decoded URL is likely an m3u8 or similar stream URL
+                        // The decoded URL is the M3U8 stream
                         val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
                         
+                        callback.invoke(
+                            newExtractorLink(
+                                name,
+                                "$name - بث مباشر",
+                                streamUrl,
+                                ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = url
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
+                        return true
+                    }
+                }
+            }
+            
+            // Also check for direct M3U8 links in other scripts
+            doc.select("script").forEach { script ->
+                val scriptText = script.html()
+                // Look for M3U8 URLs that might be directly embedded
+                val m3u8Pattern = Regex("""['"](https?://[^'"]*\.m3u8[^'"]*)['"]""")
+                m3u8Pattern.findAll(scriptText).forEach { match ->
+                    val streamUrl = match.groupValues[1]
+                    if (streamUrl.isNotBlank() && streamUrl.contains("m3u8")) {
                         callback.invoke(
                             newExtractorLink(
                                 name,
@@ -489,9 +513,9 @@ class KooraLite : MainAPI() {
             doc.select("script").forEach { script ->
                 val scriptText = script.html()
                 val hlsPatterns = listOf(
-                    Regex("""['"](https?://[^'"]*\.m3u8[^'"]*)['"]"""),
                     Regex("""src\s*:\s*['"](https?://[^'"]+\.m3u8)['"]"""),
-                    Regex("""hls\.loadSource\s*\(\s*['"]([^'"]+)['"]""")
+                    Regex("""hls\.loadSource\s*\(\s*['"]([^'"]+)['"]"""),
+                    Regex("""loadSource\s*\(\s*['"](https?://[^'"]+\.m3u8)['"]""")
                 )
                 
                 hlsPatterns.forEach { pattern ->
@@ -628,7 +652,9 @@ class KooraLite : MainAPI() {
                         Regex("""src\s*[:=]\s*['"](https?://[^'"]+)['"]"""),
                         // YouTube patterns
                         Regex("""youtube\.com/embed/([^"']+)"""),
-                        Regex("""youtu\.be/([^"']+)""")
+                        Regex("""youtu\.be/([^"']+)"""),
+                        // AlbaPlayerControl pattern
+                        Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
                     )
 
                     patterns.forEach { pattern ->
@@ -639,6 +665,24 @@ class KooraLite : MainAPI() {
                                     // It's a YouTube ID, construct full URL
                                     val youtubeUrl = if (found.startsWith("http")) found else "https://www.youtube.com/watch?v=$found"
                                     foundLinks = extractYouTubeStream(youtubeUrl, subtitleCallback, callback) || foundLinks
+                                } else if (pattern.pattern.contains("AlbaPlayerControl")) {
+                                    // It's a base64 encoded stream URL
+                                    val decodedUrl = decodeBase64(found)
+                                    if (decodedUrl.isNotBlank()) {
+                                        val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
+                                        callback.invoke(
+                                            newExtractorLink(
+                                                name,
+                                                "$name - بث مباشر",
+                                                streamUrl,
+                                                ExtractorLinkType.M3U8
+                                            ) {
+                                                this.referer = dataUrl
+                                                this.quality = Qualities.Unknown.value
+                                            }
+                                        )
+                                        foundLinks = true
+                                    }
                                 } else {
                                     val fixed = if (found.startsWith("http")) found else fixUrl(found)
                                     if (fixed.contains(".m3u8") || fixed.contains("stream") || fixed.contains(".mp4")) {
@@ -746,7 +790,9 @@ class KooraLite : MainAPI() {
                 Regex("""player\.src\s*=\s*['"]([^'"]+)['"]"""),
                 // YouTube patterns
                 Regex("""youtube\.com/embed/([^"']+)"""),
-                Regex("""youtu\.be/([^"']+)""")
+                Regex("""youtu\.be/([^"']+)"""),
+                // AlbaPlayerControl pattern
+                Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
             )
 
             patterns.forEach { pattern ->
@@ -757,6 +803,24 @@ class KooraLite : MainAPI() {
                             // It's a YouTube ID, construct full URL
                             val youtubeUrl = if (found.startsWith("http")) found else "https://www.youtube.com/watch?v=$found"
                             foundLinks = extractYouTubeStream(youtubeUrl, subtitleCallback, callback) || foundLinks
+                        } else if (pattern.pattern.contains("AlbaPlayerControl")) {
+                            // It's a base64 encoded stream URL
+                            val decodedUrl = decodeBase64(found)
+                            if (decodedUrl.isNotBlank()) {
+                                val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
+                                callback.invoke(
+                                    newExtractorLink(
+                                        name,
+                                        "$name - بث مباشر",
+                                        streamUrl,
+                                        ExtractorLinkType.M3U8
+                                    ) {
+                                        this.referer = srcFixed
+                                        this.quality = Qualities.Unknown.value
+                                    }
+                                )
+                                foundLinks = true
+                            }
                         } else {
                             val fixed = if (found.startsWith("http")) found else fixUrl(found)
                             if (fixed.contains("m3u8") || fixed.contains("mp4") || fixed.contains("stream")) {
