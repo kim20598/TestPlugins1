@@ -239,7 +239,9 @@ class AnimeSuge : MainAPI() {
             }
             
             if (isMovie) {
-                newMovieLoadResponse(title, url, TvType.AnimeMovie) {
+                // For movies, use the first episode URL as dataUrl or the page URL itself
+                val dataUrl = episodes.firstOrNull()?.url ?: url
+                newMovieLoadResponse(title, url, TvType.AnimeMovie, dataUrl) {
                     this.posterUrl = poster
                     this.plot = plot
                 }
