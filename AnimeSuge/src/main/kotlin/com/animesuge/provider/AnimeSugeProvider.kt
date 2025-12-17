@@ -7,9 +7,9 @@ import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 class AnimeSugePlugin : BasePlugin() {
     override fun load() {
         registerMainAPI(AnimeSuge())
-        // Register extractors
         registerExtractorAPI(AnimeSugeMegaPlay())
-        registerExtractorAPI(AnimeSugeStreamWish())
-        registerExtractorAPI(AnimeSugeFileMoon())
+        // Remove these if you don't have them:
+        // registerExtractorAPI(AnimeSugeStreamWish())
+        // registerExtractorAPI(AnimeSugeFileMoon())
     }
 }
