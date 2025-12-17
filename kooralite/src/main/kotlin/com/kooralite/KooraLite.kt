@@ -129,48 +129,75 @@ class KooraLite : MainAPI() {
 
         val document = app.get(actualUrl).document
 
-        // Build simple description
+        // Build detailed description with enhanced formatting
         val description = buildString {
+            // Basic match info
             if (team1.isNotBlank() && team2.isNotBlank()) {
-                append("⚽ $team1 vs $team2\n")
+                append("⚽ $team1 vs $team2\n\n")
             }
-            if (time.isNotBlank()) {
-                append("🕒 الوقت: $time\n")
-            }
-            if (tournament.isNotBlank()) {
-                append("🏆 البطولة: $tournament\n")
-            }
-            when (status) {
-                "live" -> append("🔴 الحالة: البث مباشر الآن\n")
-                "finished" -> append("✅ الحالة: انتهت المباراة\n")
-                else -> append("⏳ الحالة: قادمة\n")
-            }
-        }
-
-         // Extract match info from table
-            val matchTable = document.select("table.table-bordered")
-            if (matchTable.isNotEmpty()) {
-                append("\n📋 بطاقة المباراة:\n")
-
-                // Extract table rows
-                matchTable.select("tr").forEach { row ->
-                    val header = row.select("th").text().trim()
-                    val value = row.select("td").text().trim()
-
-                    if (header.isNotBlank() && value.isNotBlank()) {
-                        when (header) {
-                            "البطولة" -> append("🏆 $header: $value\n")
-                            "اسم القناة" -> append("📺 $header: $value\n")
-                            "تاريخ المباراة" -> append("📅 $header: $value\n")
-                            "توقيت المباراة" -> append("⏰ $header: $value\n")
-                            "المعلق" -> append("🎙️ $header: $value\n")
-                            "نتيجة المباراة" -> append("📊 $header: $value\n")
-                            else -> append("• $header: $value\n")
+            
+            // Extract additional match details from the page
+            val detailsMap = mutableMapOf<String, String>()
+            
+            // Look for match details in various HTML structures
+            document.select(".match-details, .match-info, .match-data, .details, .info").forEach { container ->
+                container.select("li, .detail-item, .info-row").forEach { item ->
+                    val headerElement = item.select(".header, .label, strong, b, span:first-child").firstOrNull()
+                    val valueElement = item.select(".value, .text, span:last-child").firstOrNull()
+                    
+                    if (headerElement != null && valueElement != null) {
+                        val header = headerElement.text().trim().removeSuffix(":").trim()
+                        val value = valueElement.text().trim()
+                        
+                        if (header.isNotBlank() && value.isNotBlank()) {
+                            detailsMap[header] = value
                         }
                     }
                 }
             }
-  
+            
+            // Also check for table-like structures
+            document.select("table tr").forEach { row ->
+                val cells = row.select("td, th")
+                if (cells.size >= 2) {
+                    val header = cells[0].text().trim().removeSuffix(":").trim()
+                    val value = cells[1].text().trim()
+                    if (header.isNotBlank() && value.isNotBlank()) {
+                        detailsMap[header] = value
+                    }
+                }
+            }
+            
+            // Add predefined details if they exist
+            if (tournament.isNotBlank()) detailsMap["البطولة"] = tournament
+            if (time.isNotBlank()) {
+                detailsMap["تاريخ المباراة"] = time  // You might want to split this into date and time
+                detailsMap["توقيت المباراة"] = time
+            }
+            
+            // Add status
+            when (status) {
+                "live" -> detailsMap["الحالة"] = "🔴 البث مباشر الآن"
+                "finished" -> detailsMap["الحالة"] = "✅ انتهت المباراة"
+                else -> detailsMap["الحالة"] = "⏳ قادمة"
+            }
+            
+            // Format the details with icons
+            detailsMap.forEach { (header, value) ->
+                if (header.isNotBlank() && value.isNotBlank()) {
+                    when (header) {
+                        "البطولة" -> append("🏆 $header: $value\n")
+                        "اسم القناة" -> append("📺 $header: $value\n")
+                        "تاريخ المباراة" -> append("📅 $header: $value\n")
+                        "توقيت المباراة" -> append("⏰ $header: $value\n")
+                        "المعلق" -> append("🎙️ $header: $value\n")
+                        "نتيجة المباراة" -> append("📊 $header: $value\n")
+                        else -> append("• $header: $value\n")
+                    }
+                }
+            }
+        }
+
         return newMovieLoadResponse(title, url, TvType.Movie, actualUrl) {
             this.posterUrl = poster
             this.plot = description.trim()
