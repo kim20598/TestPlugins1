@@ -3,7 +3,6 @@ package com.animesuge.provider
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
@@ -151,9 +150,6 @@ class AnimeSuge : MainAPI() {
                 }
             }
             
-            // Log for debugging
-            println("AnimeSuge Debug: Title=$title, isMovie=$isMovie, episodesFound=${episodes.size}")
-            
             if (isMovie || episodes.isEmpty()) {
                 newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
                     this.posterUrl = poster
@@ -182,13 +178,12 @@ class AnimeSuge : MainAPI() {
         return try {
             val document = app.get(data).document
             
-            // Try to find server data
-            val serverElements = document.select(".server[data-link-id], [data-link-id]")
-            
-            for (server in serverElements) {
+            // Method 1: Look for server wrapper with data-link-id
+            val servers = document.select(".server[data-link-id], [data-link-id]")
+            for (server in servers) {
                 val dataLinkId = server.attr("data-link-id")
                 if (dataLinkId.isNotBlank()) {
-                    // Try different server patterns
+                    // AnimeSuge uses MegaPlay - try different server patterns
                     val serverPatterns = listOf("s-1", "s-2", "s-3", "s-4")
                     for (serverNum in serverPatterns) {
                         val megaUrl = "https://megaplay.buzz/stream/$serverNum/$dataLinkId?autostart=true"
@@ -196,10 +191,16 @@ class AnimeSuge : MainAPI() {
                             return true
                         }
                     }
+                    
+                    // Try direct MegaPlay API
+                    val megaApiUrl = "https://megaplay.buzz/stream/getSources?id=$dataLinkId"
+                    if (loadExtractor(megaApiUrl, subtitleCallback, callback)) {
+                        return true
+                    }
                 }
             }
             
-            // Look for iframe as fallback
+            // Method 2: Look for iframe
             val iframe = document.selectFirst("iframe[src]")
             val iframeSrc = iframe?.attr("src")?.takeIf { it.isNotBlank() }
                 ?.let { if (it.startsWith("http")) it else "https:$it" }
@@ -208,14 +209,37 @@ class AnimeSuge : MainAPI() {
                 return true
             }
             
+            // Method 3: Look for video player scripts
+            val scripts = document.select("script")
+            for (script in scripts) {
+                val scriptText = script.html()
+                
+                // Look for MegaPlay pattern
+                val megaPattern = Regex("""megaplay\.buzz/stream/([^"'\s?]+)""")
+                val matches = megaPattern.findAll(scriptText)
+                
+                for (match in matches) {
+                    val megaUrl = "https://${match.value}"
+                    if (loadExtractor(megaUrl, subtitleCallback, callback)) {
+                        return true
+                    }
+                }
+                
+                // Look for data-link-id in scripts
+                val linkIdPattern = Regex("""data-link-id['"]?\s*:\s*['"]([^'"]+)['"]""")
+                val linkIdMatch = linkIdPattern.find(scriptText)
+                if (linkIdMatch != null) {
+                    val dataLinkId = linkIdMatch.groupValues[1]
+                    val megaUrl = "https://megaplay.buzz/stream/s-1/$dataLinkId?autostart=true"
+                    if (loadExtractor(megaUrl, subtitleCallback, callback)) {
+                        return true
+                    }
+                }
+            }
+            
             false
         } catch (e: Exception) {
             false
         }
     }
-    
-    data class ApiResponse(
-        @JsonProperty("status") val status: Int? = null,
-        @JsonProperty("result") val result: String? = null
-    )
 }
