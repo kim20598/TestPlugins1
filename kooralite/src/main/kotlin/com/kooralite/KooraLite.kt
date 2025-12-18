@@ -11,6 +11,9 @@ class KooraLite : MainAPI() {
     override var lang = "ar"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie)
+    
+    // Custom poster image for all matches
+    private val customPosterUrl = "https://raw.githubusercontent.com/kim20598/TestPlugins1/master/kooralite/images.png"
 
     private fun decodeBase64(encoded: String): String {
         return try {
@@ -37,7 +40,9 @@ class KooraLite : MainAPI() {
         val team2LogoRaw = selectFirst(".MT_Team.TM2 .TM_Logo img")?.attr("src")
         val team1Logo = team1LogoRaw?.let { if (it.startsWith("http")) it else fixUrl(it) }
         val team2Logo = team2LogoRaw?.let { if (it.startsWith("http")) it else fixUrl(it) }
-        val poster = team1Logo ?: team2Logo
+        
+        // Always use custom poster instead of team logos
+        val poster = customPosterUrl
 
         // Get status
         val statusClass = classNames().firstOrNull { it in listOf("live", "finished", "coming-soon") } ?: ""
@@ -63,7 +68,7 @@ class KooraLite : MainAPI() {
         }
 
         // Store match data
-        val matchData = listOf(title, time, tournament, statusClass, poster ?: "", team1, team2, team1Logo ?: "", team2Logo ?: "")
+        val matchData = listOf(title, time, tournament, statusClass, poster, team1, team2, team1Logo ?: "", team2Logo ?: "")
             .joinToString("|")
         val dataUrl = "$href|$matchData"
 
@@ -123,7 +128,7 @@ class KooraLite : MainAPI() {
         val time = parts.getOrNull(2) ?: ""
         val tournament = parts.getOrNull(3) ?: ""
         val status = parts.getOrNull(4) ?: ""
-        val poster = parts.getOrNull(5)
+        val poster = customPosterUrl // Always use custom poster
         val team1 = parts.getOrNull(6) ?: ""
         val team2 = parts.getOrNull(7) ?: ""
 
@@ -218,15 +223,11 @@ class KooraLite : MainAPI() {
                 }
             }
             
-            println("DEBUG: Found ${servers.size} servers: ${servers.map { it.first }}")
-            
             // =====================================
             // STEP 3: Process EACH server to get its stream
             // =====================================
             for ((serverName, serverUrl) in servers) {
                 try {
-                    println("DEBUG: Processing server: $serverName -> $serverUrl")
-                    
                     // Fetch THIS server's page
                     val serverDoc = app.get(serverUrl).document
                     
@@ -241,8 +242,6 @@ class KooraLite : MainAPI() {
                         
                         if (decodedUrl.isNotBlank()) {
                             val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
-                            
-                            println("DEBUG: Found stream for $serverName: $streamUrl")
                             
                             // Assign quality
                             val quality = when {
@@ -264,14 +263,9 @@ class KooraLite : MainAPI() {
                                 }
                             )
                             foundAnyLink = true
-                        } else {
-                            println("DEBUG: Failed to decode base64 for $serverName")
                         }
-                    } else {
-                        println("DEBUG: No AlbaPlayerControl found for $serverName")
                     }
                 } catch (e: Exception) {
-                    println("DEBUG: Error processing server $serverName: ${e.message}")
                     continue
                 }
             }
@@ -308,7 +302,7 @@ class KooraLite : MainAPI() {
             }
             
         } catch (e: Exception) {
-            println("DEBUG: Error in extractAllAlbaPlayerServers: ${e.message}")
+            // Do nothing
         }
         
         return foundAnyLink
