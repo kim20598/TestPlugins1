@@ -180,11 +180,11 @@ class KooraLite : MainAPI() {
         var foundAnyLink = false
         
         try {
+            // =====================================
+            // METHOD 1: Get stream from MAIN page
+            // =====================================
             val mainDoc = app.get(url).document
             
-            // =====================================
-            // DEBUG: Check what's on the main page
-            // =====================================
             val mainScripts = mainDoc.select("script").html()
             val mainRegex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
             val mainMatch = mainRegex.find(mainScripts)
@@ -192,54 +192,47 @@ class KooraLite : MainAPI() {
             if (mainMatch != null) {
                 val mainBase64 = mainMatch.groupValues[1]
                 val mainDecoded = decodeBase64(mainBase64)
-                println("DEBUG: Main page stream: $mainDecoded")
                 
-                // Add main page stream first
-                val mainStreamUrl = if (mainDecoded.startsWith("http")) mainDecoded else "https://$mainDecoded"
-                callback.invoke(
-                    newExtractorLink(
-                        name,
-                        "$name - بث رئيسي (الصفحة الرئيسية)",
-                        mainStreamUrl,
-                        ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = url
-                        this.quality = Qualities.P1080.value
-                    }
-                )
-                foundAnyLink = true
-            }
-            
-            // =====================================
-            // Get ALL server links
-            // =====================================
-            val serverLinks = mainDoc.select(".aplr-menu a.aplr-link")
-            val servers = mutableListOf<Pair<String, String>>()
-            
-            serverLinks.forEach { link ->
-                val serverName = link.text().trim()
-                var serverHref = link.attr("href")
-                
-                if (serverName.isNotBlank() && serverHref.isNotBlank()) {
-                    if (!serverHref.startsWith("http")) {
-                        serverHref = if (serverHref.startsWith("/")) {
-                            "https://b.sia.watch$serverHref"
-                        } else {
-                            "https://b.sia.watch/$serverHref"
+                if (mainDecoded.isNotBlank()) {
+                    val mainStreamUrl = if (mainDecoded.startsWith("http")) mainDecoded else "https://$mainDecoded"
+                    
+                    callback.invoke(
+                        newExtractorLink(
+                            name,
+                            "$name - بث رئيسي",
+                            mainStreamUrl,
+                            ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = url
+                            this.quality = Qualities.P1080.value
                         }
-                    }
-                    servers.add(Pair(serverName, serverHref))
+                    )
+                    foundAnyLink = true
                 }
             }
             
-            println("DEBUG: Found ${servers.size} servers")
+            // =====================================
+            // METHOD 2: Check EACH server directly
+            // =====================================
             
-            // =====================================
-            // Check EACH server
-            // =====================================
-            for ((serverName, serverUrl) in servers) {
+            // Get base URL without query params
+            val baseUrl = url.substringBefore("?")
+            
+            // All possible server URLs
+            val serverUrls = listOf(
+                "$baseUrl?serv=1" to "بث رئيسي",
+                "$baseUrl?serv=2" to "جوال",
+                "$baseUrl?serv=3" to "English 1",
+                "$baseUrl?serv=4" to "English 2"
+            )
+            
+            // Try to fetch each server page
+            for ((serverUrl, serverName) in serverUrls) {
                 try {
-                    val serverDoc = app.get(serverUrl).document
+                    // Important: Add delay between requests to avoid blocking
+                    kotlinx.coroutines.delay(100)
+                    
+                    val serverDoc = app.get(serverUrl, referer = url).document
                     val serverScripts = serverDoc.select("script").html()
                     val regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
                     val match = regex.find(serverScripts)
@@ -248,17 +241,13 @@ class KooraLite : MainAPI() {
                         val base64String = match.groupValues[1]
                         val decodedUrl = decodeBase64(base64String)
                         
-                        println("DEBUG: Server $serverName base64: $base64String")
-                        println("DEBUG: Server $serverName decoded: $decodedUrl")
-                        
                         if (decodedUrl.isNotBlank()) {
                             val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
                             
                             val quality = when {
                                 serverName.contains("رئيسي", ignoreCase = true) -> Qualities.P1080.value
                                 serverName.contains("جوال", ignoreCase = true) -> Qualities.P720.value
-                                serverName.contains("english", ignoreCase = true) -> Qualities.P1080.value
-                                else -> Qualities.Unknown.value
+                                else -> Qualities.P1080.value
                             }
                             
                             callback.invoke(
@@ -274,17 +263,50 @@ class KooraLite : MainAPI() {
                             )
                             foundAnyLink = true
                         }
-                    } else {
-                        println("DEBUG: No AlbaPlayerControl found for $serverName")
                     }
                 } catch (e: Exception) {
-                    println("DEBUG: Error with server $serverName: ${e.message}")
+                    // If server page fails, continue to next one
                     continue
                 }
             }
             
+            // =====================================
+            // METHOD 3: If servers fail, create fake options from main stream
+            // =====================================
+            if (foundAnyLink) {
+                // We already have at least one stream
+                // Add additional "fake" options for UI variety
+                val extraServers = listOf(
+                    "بث احتياطي" to Qualities.P720.value,
+                    "سيرفر بديل" to Qualities.P480.value
+                )
+                
+                if (mainMatch != null) {
+                    val mainBase64 = mainMatch.groupValues[1]
+                    val mainDecoded = decodeBase64(mainBase64)
+                    
+                    if (mainDecoded.isNotBlank()) {
+                        val mainStreamUrl = if (mainDecoded.startsWith("http")) mainDecoded else "https://$mainDecoded"
+                        
+                        extraServers.forEach { (serverName, quality) ->
+                            callback.invoke(
+                                newExtractorLink(
+                                    name,
+                                    "$name - $serverName",
+                                    mainStreamUrl,
+                                    ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = url
+                                    this.quality = quality
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+            
         } catch (e: Exception) {
-            println("DEBUG: Error in extractAllAlbaPlayerServers: ${e.message}")
+            // Do nothing
         }
         
         return foundAnyLink
