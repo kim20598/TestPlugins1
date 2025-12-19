@@ -17,7 +17,7 @@ class Letterboxd : MainAPI() {
         TvType.Documentary
     )
     
-    // List of your other providers for user to choose from
+    // List of your other providers for user reference
     private val availableProviders = listOf(
         "AnimeSuge",
         "Arabseed", 
@@ -33,19 +33,17 @@ class Letterboxd : MainAPI() {
         "profile_watchlist" to "My Watchlist",
         "profile_watched" to "Recently Watched",
         "profile_lists" to "My Lists",
-        "profile_stats" to "My Stats",
         "trending" to "Trending Now",
         "popular_week" to "Popular This Week",
-        "upcoming" to "Upcoming Films",
-        "top_250" to "Top 250 Films"
+        "upcoming" to "Upcoming Films"
     )
     
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        // In real implementation, get username from settings
-        val username = "exampleUser" // Placeholder
+        // For demo - in real app, get from settings
+        val username = "exampleUser"
         
         return when (request.data) {
             "profile_watchlist" -> {
@@ -59,11 +57,14 @@ class Letterboxd : MainAPI() {
                 newHomePageResponse(request.name, items, hasNext = items.isNotEmpty())
             }
             "profile_lists" -> {
-                val lists = fetchLists(username)
+                val lists = try {
+                    fetchLists(username)
+                } catch (e: Exception) {
+                    emptyList()
+                }
                 val items = lists.map { list ->
                     newMovieSearchResponse(list.title, list.url, TvType.Movie) {
                         this.posterUrl = null
-                        this.plot = "${list.filmCount} films"
                     }
                 }
                 newHomePageResponse(request.name, items)
@@ -83,19 +84,9 @@ class Letterboxd : MainAPI() {
                     .map { it.toSearchResponse() }
                 newHomePageResponse(request.name, items, hasNext = items.isNotEmpty())
             }
-            "top_250" -> {
-                val items = fetchFromLetterboxd("$mainUrl/ajax/top-250-films/page/$page/")
-                    .map { it.toSearchResponse() }
-                newHomePageResponse(request.name, items, hasNext = items.isNotEmpty())
-            }
             else -> {
-                // For profile_stats, show placeholder
-                val items = listOf(
-                    newMovieSearchResponse("Films Watched: 0", "", TvType.Movie),
-                    newMovieSearchResponse("Watchlist: 0", "", TvType.Movie),
-                    newMovieSearchResponse("Please set username in settings", "", TvType.Movie)
-                )
-                newHomePageResponse(request.name, items)
+                // Fallback
+                newHomePageResponse(request.name, emptyList())
             }
         }
     }
@@ -103,19 +94,19 @@ class Letterboxd : MainAPI() {
     // ==================== SEARCH ====================
     
     override suspend fun search(query: String): List<SearchResponse> {
-        val searchUrl = "$mainUrl/search/films/${URLEncoder.encode(query, "UTF-8")}/"
-        val films = fetchFromLetterboxd(searchUrl)
+        val encodedQuery = query.replace(" ", "-")
+        val searchUrl = "$mainUrl/search/films/$encodedQuery/"
+        
+        val films = try {
+            fetchFromLetterboxd(searchUrl)
+        } catch (e: Exception) {
+            emptyList()
+        }
         
         return films.map { film ->
             newMovieSearchResponse(film.title, film.url, TvType.Movie) {
                 this.posterUrl = film.posterUrl
                 this.year = film.year
-                this.plot = film.description?.take(100)
-                
-                // Add provider availability hint
-                if (availableProviders.isNotEmpty()) {
-                    this.description = "Search across ${availableProviders.size} providers"
-                }
             }
         }
     }
@@ -131,32 +122,22 @@ class Letterboxd : MainAPI() {
         val description = doc.selectFirst("meta[property='og:description']")?.attr("content")
         val poster = doc.selectFirst("meta[property='og:image']")?.attr("content")
         
-        // Create a special data format that includes provider choices
-        val dataString = buildString {
-            append("letterboxd:$url")
-            append("|providers:")
-            append(availableProviders.joinToString(","))
-        }
+        // Store the film title for search reference
+        val dataString = "letterboxd:$title:$year"
         
         return newMovieLoadResponse(title, url, TvType.Movie, dataString) {
             this.posterUrl = poster
             this.plot = buildString {
                 description?.let { append(it) }
                 append("\n\n")
-                append("Available providers: ${availableProviders.joinToString(", ")}")
-                append("\n\nSelect a provider to search for this film.")
+                append("This is a Letterboxd integration provider.")
+                append("\n\nAvailable providers to search:")
+                availableProviders.forEach { provider ->
+                    append("\n• $provider")
+                }
+                append("\n\nSearch for this film in any provider using the title: '$title'")
             }
             this.year = year
-            
-            // Add recommendations
-            val recommendations = fetchFromLetterboxd(url)
-                .take(5)
-                .map { rec ->
-                    newMovieSearchResponse(rec.title, rec.url, TvType.Movie) {
-                        this.posterUrl = rec.posterUrl
-                    }
-                }
-            this.recommendations = recommendations
         }
     }
 
@@ -169,37 +150,19 @@ class Letterboxd : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         // Parse the data string
-        val parts = data.split("|")
-        val letterboxdUrl = parts.firstOrNull { it.startsWith("letterboxd:") }
-            ?.removePrefix("letterboxd:") ?: return false
+        val parts = data.removePrefix("letterboxd:").split(":")
+        if (parts.size < 2) return false
         
-        val doc = app.get(letterboxdUrl).document
-        val filmTitle = doc.selectFirst("meta[property='og:title']")?.attr("content") ?: "Unknown"
-        val filmYear = doc.selectFirst(".releaseyear")?.text()?.toIntOrNull()
+        val filmTitle = parts[0]
+        val filmYear = parts.getOrNull(1)?.toIntOrNull()
         
-        // Extract providers from data or use default
-        val providers = parts.firstOrNull { it.startsWith("providers:") }
-            ?.removePrefix("providers:")
-            ?.split(",")
-            ?: availableProviders
+        // For Letterboxd provider, we don't directly provide links
+        // Instead, we suggest searching in other providers
+        // Return false to indicate no direct links available
+        // The user will see a message and can manually search
         
-        // Create a search bridge - this is the key innovation
-        // Instead of directly loading links, we prepare search queries
-        val searchQuery = if (filmYear != null) {
-            "$filmTitle $filmYear"
-        } else {
-            filmTitle
-        }
-        
-        // Store search info for the UI
-        // In a real implementation, you would:
-        // 1. Save the search query to shared preferences
-        // 2. Launch a Cloudstream search activity
-        // 3. Let user choose which provider to use
-        
-        // For now, return false since we're not directly loading links
-        // This tells Cloudstream to show the "No links found" message
-        // where we can add a custom button to trigger provider search
+        // You could add a custom message here, but the simplest approach
+        // is to return false and let the user search manually
         
         return false
     }
@@ -220,8 +183,7 @@ class Letterboxd : MainAPI() {
                     title = title,
                     year = year,
                     url = link?.let { "$mainUrl$it" } ?: "",
-                    posterUrl = poster,
-                    description = null
+                    posterUrl = poster
                 )
             }
         } catch (e: Exception) {
@@ -250,14 +212,13 @@ class Letterboxd : MainAPI() {
         }
     }
     
-    // ==================== DATA CLASSES ====================
+    // ==================== SIMPLE DATA CLASSES ====================
     
     data class LetterboxdFilm(
         val title: String,
         val year: Int? = null,
         val url: String,
-        val posterUrl: String? = null,
-        val description: String? = null
+        val posterUrl: String? = null
     ) {
         fun toSearchResponse(): SearchResponse {
             return newMovieSearchResponse(title, url, TvType.Movie) {
