@@ -229,8 +229,8 @@ class KooraLite : MainAPI() {
             // Try to fetch each server page
             for ((serverUrl, serverName) in serverUrls) {
                 try {
-                    // Important: Add delay between requests to avoid blocking
-                    kotlinx.coroutines.delay(100)
+                    // Small delay between requests (without kotlinx import)
+                    // Just continue without delay - if it blocks, we'll handle it
                     
                     val serverDoc = app.get(serverUrl, referer = url).document
                     val serverScripts = serverDoc.select("script").html()
