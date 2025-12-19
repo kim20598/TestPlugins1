@@ -12,7 +12,6 @@ class KooraLite : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie)
     
-    // Custom poster image for all matches
     private val customPosterUrl = "https://raw.githubusercontent.com/kim20598/TestPlugins1/master/kooralite/images.png"
 
     private fun decodeBase64(encoded: String): String {
@@ -36,15 +35,8 @@ class KooraLite : MainAPI() {
         val time = selectFirst(".MT_Time")?.text()?.trim() ?: ""
         val tournament = selectFirst(".MT_Info li:last-child span")?.text()?.trim() ?: ""
         
-        val team1LogoRaw = selectFirst(".MT_Team.TM1 .TM_Logo img")?.attr("src")
-        val team2LogoRaw = selectFirst(".MT_Team.TM2 .TM_Logo img")?.attr("src")
-        val team1Logo = team1LogoRaw?.let { if (it.startsWith("http")) it else fixUrl(it) }
-        val team2Logo = team2LogoRaw?.let { if (it.startsWith("http")) it else fixUrl(it) }
-        
-        // Always use custom poster instead of team logos
         val poster = customPosterUrl
 
-        // Get status
         val statusClass = classNames().firstOrNull { it in listOf("live", "finished", "coming-soon") } ?: ""
         val statusText = when (statusClass) {
             "live" -> "🔴 مباشر"
@@ -67,8 +59,7 @@ class KooraLite : MainAPI() {
             "$statusText $title"
         }
 
-        // Store match data
-        val matchData = listOf(title, time, tournament, statusClass, poster, team1, team2, team1Logo ?: "", team2Logo ?: "")
+        val matchData = listOf(title, time, tournament, statusClass, poster, team1, team2)
             .joinToString("|")
         val dataUrl = "$href|$matchData"
 
@@ -93,7 +84,6 @@ class KooraLite : MainAPI() {
 
         val items = mutableListOf<SearchResponse>()
 
-        // Get matches
         document.select(".AY_Match").forEach { match ->
             match.toMatchSearchResponse()?.let { items.add(it) }
         }
@@ -128,13 +118,10 @@ class KooraLite : MainAPI() {
         val time = parts.getOrNull(2) ?: ""
         val tournament = parts.getOrNull(3) ?: ""
         val status = parts.getOrNull(4) ?: ""
-        val poster = customPosterUrl // Always use custom poster
-        val team1 = parts.getOrNull(6) ?: ""
-        val team2 = parts.getOrNull(7) ?: ""
+        val poster = customPosterUrl
+        val team1 = parts.getOrNull(5) ?: ""
+        val team2 = parts.getOrNull(6) ?: ""
 
-        val document = app.get(actualUrl).document
-
-        // Build simple description
         val description = buildString {
             if (team1.isNotBlank() && team2.isNotBlank()) {
                 append("⚽ $team1 vs $team2\n")
@@ -167,12 +154,10 @@ class KooraLite : MainAPI() {
         try {
             val dataUrl = fixUrl(data)
             
-            // 1. If it's already an albaplayer URL, extract all servers
             if (dataUrl.contains("albaplayer")) {
                 return extractAllAlbaPlayerServers(dataUrl, callback)
             }
             
-            // 2. Otherwise, find albaplayer iframes
             val doc = app.get(dataUrl).document
             var foundLinks = false
             
@@ -195,13 +180,38 @@ class KooraLite : MainAPI() {
         var foundAnyLink = false
         
         try {
-            // =====================================
-            // STEP 1: Get MAIN albaplayer page
-            // =====================================
             val mainDoc = app.get(url).document
             
             // =====================================
-            // STEP 2: Extract ALL server links from the menu
+            // DEBUG: Check what's on the main page
+            // =====================================
+            val mainScripts = mainDoc.select("script").html()
+            val mainRegex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
+            val mainMatch = mainRegex.find(mainScripts)
+            
+            if (mainMatch != null) {
+                val mainBase64 = mainMatch.groupValues[1]
+                val mainDecoded = decodeBase64(mainBase64)
+                println("DEBUG: Main page stream: $mainDecoded")
+                
+                // Add main page stream first
+                val mainStreamUrl = if (mainDecoded.startsWith("http")) mainDecoded else "https://$mainDecoded"
+                callback.invoke(
+                    newExtractorLink(
+                        name,
+                        "$name - بث رئيسي (الصفحة الرئيسية)",
+                        mainStreamUrl,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = url
+                        this.quality = Qualities.P1080.value
+                    }
+                )
+                foundAnyLink = true
+            }
+            
+            // =====================================
+            // Get ALL server links
             // =====================================
             val serverLinks = mainDoc.select(".aplr-menu a.aplr-link")
             val servers = mutableListOf<Pair<String, String>>()
@@ -211,7 +221,6 @@ class KooraLite : MainAPI() {
                 var serverHref = link.attr("href")
                 
                 if (serverName.isNotBlank() && serverHref.isNotBlank()) {
-                    // Fix the URL if needed
                     if (!serverHref.startsWith("http")) {
                         serverHref = if (serverHref.startsWith("/")) {
                             "https://b.sia.watch$serverHref"
@@ -223,15 +232,14 @@ class KooraLite : MainAPI() {
                 }
             }
             
+            println("DEBUG: Found ${servers.size} servers")
+            
             // =====================================
-            // STEP 3: Process EACH server to get its stream
+            // Check EACH server
             // =====================================
             for ((serverName, serverUrl) in servers) {
                 try {
-                    // Fetch THIS server's page
                     val serverDoc = app.get(serverUrl).document
-                    
-                    // Look for AlbaPlayerControl in THIS server's scripts
                     val serverScripts = serverDoc.select("script").html()
                     val regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
                     val match = regex.find(serverScripts)
@@ -240,10 +248,12 @@ class KooraLite : MainAPI() {
                         val base64String = match.groupValues[1]
                         val decodedUrl = decodeBase64(base64String)
                         
+                        println("DEBUG: Server $serverName base64: $base64String")
+                        println("DEBUG: Server $serverName decoded: $decodedUrl")
+                        
                         if (decodedUrl.isNotBlank()) {
                             val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
                             
-                            // Assign quality
                             val quality = when {
                                 serverName.contains("رئيسي", ignoreCase = true) -> Qualities.P1080.value
                                 serverName.contains("جوال", ignoreCase = true) -> Qualities.P720.value
@@ -264,45 +274,17 @@ class KooraLite : MainAPI() {
                             )
                             foundAnyLink = true
                         }
+                    } else {
+                        println("DEBUG: No AlbaPlayerControl found for $serverName")
                     }
                 } catch (e: Exception) {
+                    println("DEBUG: Error with server $serverName: ${e.message}")
                     continue
                 }
             }
             
-            // =====================================
-            // STEP 4: Also get the stream from MAIN page as fallback
-            // =====================================
-            if (!foundAnyLink) {
-                val mainScripts = mainDoc.select("script").html()
-                val regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
-                val match = regex.find(mainScripts)
-                
-                if (match != null) {
-                    val base64String = match.groupValues[1]
-                    val decodedUrl = decodeBase64(base64String)
-                    
-                    if (decodedUrl.isNotBlank()) {
-                        val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
-                        
-                        callback.invoke(
-                            newExtractorLink(
-                                name,
-                                "$name - بث رئيسي",
-                                streamUrl,
-                                ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = url
-                                this.quality = Qualities.P1080.value
-                            }
-                        )
-                        foundAnyLink = true
-                    }
-                }
-            }
-            
         } catch (e: Exception) {
-            // Do nothing
+            println("DEBUG: Error in extractAllAlbaPlayerServers: ${e.message}")
         }
         
         return foundAnyLink
