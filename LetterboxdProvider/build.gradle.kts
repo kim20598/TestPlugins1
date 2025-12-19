@@ -8,7 +8,4 @@ cloudstream {
     
     description = "Letterboxd integration with multi-provider search"
     iconUrl = "https://letterboxd.com/static/cdn/favicon.ico"
-    
-    // Mark as meta provider
-    tags = listOf("Meta", "Aggregator", "Letterboxd")
 }
