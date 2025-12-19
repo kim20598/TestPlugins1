@@ -181,58 +181,42 @@ class KooraLite : MainAPI() {
         
         try {
             // =====================================
-            // METHOD 1: Get stream from MAIN page
+            // STEP 1: Get MAIN albaplayer page
             // =====================================
             val mainDoc = app.get(url).document
             
-            val mainScripts = mainDoc.select("script").html()
-            val mainRegex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
-            val mainMatch = mainRegex.find(mainScripts)
+            // =====================================
+            // STEP 2: Extract ALL server links from the menu
+            // =====================================
+            val serverLinks = mainDoc.select(".aplr-menu a.aplr-link")
+            val servers = mutableListOf<Pair<String, String>>()
             
-            if (mainMatch != null) {
-                val mainBase64 = mainMatch.groupValues[1]
-                val mainDecoded = decodeBase64(mainBase64)
+            serverLinks.forEach { link ->
+                val serverName = link.text().trim()
+                var serverHref = link.attr("href")
                 
-                if (mainDecoded.isNotBlank()) {
-                    val mainStreamUrl = if (mainDecoded.startsWith("http")) mainDecoded else "https://$mainDecoded"
-                    
-                    callback.invoke(
-                        newExtractorLink(
-                            name,
-                            "$name - بث رئيسي",
-                            mainStreamUrl,
-                            ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = url
-                            this.quality = Qualities.P1080.value
+                if (serverName.isNotBlank() && serverHref.isNotBlank()) {
+                    // Fix the URL if needed
+                    if (!serverHref.startsWith("http")) {
+                        serverHref = if (serverHref.startsWith("/")) {
+                            "https://b.sia.watch$serverHref"
+                        } else {
+                            "https://b.sia.watch/$serverHref"
                         }
-                    )
-                    foundAnyLink = true
+                    }
+                    servers.add(Pair(serverName, serverHref))
                 }
             }
             
             // =====================================
-            // METHOD 2: Check EACH server directly
+            // STEP 3: Process EACH server to get its stream
             // =====================================
-            
-            // Get base URL without query params
-            val baseUrl = url.substringBefore("?")
-            
-            // All possible server URLs
-            val serverUrls = listOf(
-                "$baseUrl?serv=1" to "بث رئيسي",
-                "$baseUrl?serv=2" to "جوال",
-                "$baseUrl?serv=3" to "English 1",
-                "$baseUrl?serv=4" to "English 2"
-            )
-            
-            // Try to fetch each server page
-            for ((serverUrl, serverName) in serverUrls) {
+            for ((serverName, serverUrl) in servers) {
                 try {
-                    // Small delay between requests (without kotlinx import)
-                    // Just continue without delay - if it blocks, we'll handle it
+                    // Fetch THIS server's page
+                    val serverDoc = app.get(serverUrl).document
                     
-                    val serverDoc = app.get(serverUrl, referer = url).document
+                    // Look for AlbaPlayerControl in THIS server's scripts
                     val serverScripts = serverDoc.select("script").html()
                     val regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
                     val match = regex.find(serverScripts)
@@ -244,10 +228,12 @@ class KooraLite : MainAPI() {
                         if (decodedUrl.isNotBlank()) {
                             val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
                             
+                            // Assign quality
                             val quality = when {
                                 serverName.contains("رئيسي", ignoreCase = true) -> Qualities.P1080.value
                                 serverName.contains("جوال", ignoreCase = true) -> Qualities.P720.value
-                                else -> Qualities.P1080.value
+                                serverName.contains("english", ignoreCase = true) -> Qualities.P1080.value
+                                else -> Qualities.Unknown.value
                             }
                             
                             callback.invoke(
@@ -265,42 +251,37 @@ class KooraLite : MainAPI() {
                         }
                     }
                 } catch (e: Exception) {
-                    // If server page fails, continue to next one
                     continue
                 }
             }
             
             // =====================================
-            // METHOD 3: If servers fail, create fake options from main stream
+            // STEP 4: Also get the stream from MAIN page as fallback
             // =====================================
-            if (foundAnyLink) {
-                // We already have at least one stream
-                // Add additional "fake" options for UI variety
-                val extraServers = listOf(
-                    "بث احتياطي" to Qualities.P720.value,
-                    "سيرفر بديل" to Qualities.P480.value
-                )
+            if (!foundAnyLink) {
+                val mainScripts = mainDoc.select("script").html()
+                val regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
+                val match = regex.find(mainScripts)
                 
-                if (mainMatch != null) {
-                    val mainBase64 = mainMatch.groupValues[1]
-                    val mainDecoded = decodeBase64(mainBase64)
+                if (match != null) {
+                    val base64String = match.groupValues[1]
+                    val decodedUrl = decodeBase64(base64String)
                     
-                    if (mainDecoded.isNotBlank()) {
-                        val mainStreamUrl = if (mainDecoded.startsWith("http")) mainDecoded else "https://$mainDecoded"
+                    if (decodedUrl.isNotBlank()) {
+                        val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
                         
-                        extraServers.forEach { (serverName, quality) ->
-                            callback.invoke(
-                                newExtractorLink(
-                                    name,
-                                    "$name - $serverName",
-                                    mainStreamUrl,
-                                    ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = url
-                                    this.quality = quality
-                                }
-                            )
-                        }
+                        callback.invoke(
+                            newExtractorLink(
+                                name,
+                                "$name - بث رئيسي",
+                                streamUrl,
+                                ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = url
+                                this.quality = Qualities.P1080.value
+                            }
+                        )
+                        foundAnyLink = true
                     }
                 }
             }
