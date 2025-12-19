@@ -6,7 +6,7 @@ import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
 class KooraLite : MainAPI() {
-    override var mainUrl = "https://www.fullmatch-hd.com"
+    override var mainUrl = "https://www.bein-live.com"
     override var name = "KooraLite - كورة لايت"
     override var lang = "ar"
     override val hasMainPage = true
