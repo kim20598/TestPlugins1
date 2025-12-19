@@ -1,3 +1,5 @@
+package com.delegation
+
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.SubtitleFile
 import com.lagradost.cloudstream3.utils.loadExtractor
@@ -8,8 +10,8 @@ class AkwamDelegate : DelegateSource() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // Your search and load logic here
-        val url = "..." // Example URL
-        loadExtractor(url, subtitleCallback, callback) // Correct call
+        // Your implementation here
+        val url = "..." // Get URL from meta
+        loadExtractor(url, subtitleCallback, callback)
     }
 }
