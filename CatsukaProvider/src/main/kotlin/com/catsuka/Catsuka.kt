@@ -75,7 +75,8 @@ class Catsuka : MainAPI() {
     // Parse regular video cards (for updates, highlights, categories)
     private fun parseVideoCard(element: Element): SearchResponse? {
         val link = element.selectFirst("a") ?: return null
-        val href = fixUrl(link.attr("href")) ?: return null
+        val href = link.attr("href").takeIf { it.isNotBlank() } ?: return null
+        val fixedUrl = fixUrl(href)
         
         val img = element.selectFirst("img")
         val titleElement = element.selectFirst("span") ?: return null
@@ -84,10 +85,10 @@ class Catsuka : MainAPI() {
         if (title.isBlank()) return null
         
         val posterUrl = img?.attr("src")?.let { 
-            if (it.startsWith("http")) it else "$mainUrl/$it".removePrefix("$mainUrl//")
+            fixUrl(it)
         }
         
-        return newMovieSearchResponse(title, href) {
+        return newMovieSearchResponse(title, fixedUrl) {
             this.posterUrl = posterUrl
         }
     }
@@ -95,7 +96,8 @@ class Catsuka : MainAPI() {
     // Parse BINGE section cards (different structure)
     private fun parseBingeCard(element: Element): SearchResponse? {
         val link = element.selectFirst("a") ?: return null
-        val href = fixUrl(link.attr("href")) ?: return null
+        val href = link.attr("href").takeIf { it.isNotBlank() } ?: return null
+        val fixedUrl = fixUrl(href)
         
         val img = element.selectFirst("img")
         val titleElement = element.selectFirst("p") ?: return null
@@ -104,11 +106,11 @@ class Catsuka : MainAPI() {
         if (title.isBlank()) return null
         
         val posterUrl = img?.attr("src")?.let { 
-            if (it.startsWith("http")) it else "$mainUrl/$it".removePrefix("$mainUrl//")
+            fixUrl(it)
         }
         
         // BINGE items are usually series
-        return newAnimeSearchResponse(title, href) {
+        return newAnimeSearchResponse(title, fixedUrl) {
             this.posterUrl = posterUrl
         }
     }
@@ -116,7 +118,8 @@ class Catsuka : MainAPI() {
     // Parse main slider videos
     private fun parseMainSlider(element: Element): SearchResponse? {
         val link = element.selectFirst("a") ?: return null
-        val href = fixUrl(link.attr("href")) ?: return null
+        val href = link.attr("href").takeIf { it.isNotBlank() } ?: return null
+        val fixedUrl = fixUrl(href)
         
         val titleElement = element.selectFirst(".caption span:first-child") ?: return null
         val title = titleElement.text().trim()
@@ -125,10 +128,10 @@ class Catsuka : MainAPI() {
         
         // Get poster from video element
         val poster = element.selectFirst("video")?.attr("poster")?.let {
-            if (it.startsWith("http")) it else "$mainUrl/$it".removePrefix("$mainUrl//")
+            fixUrl(it)
         }
         
-        return newMovieSearchResponse(title, href) {
+        return newMovieSearchResponse(title, fixedUrl) {
             this.posterUrl = poster
         }
     }
@@ -168,9 +171,9 @@ class Catsuka : MainAPI() {
         
         // Extract poster
         val poster = document.selectFirst("video[poster], img[src*='vignettes'], img[src*='head']")?.attr("src")?.let {
-            if (it.startsWith("http")) it else "$mainUrl/$it".removePrefix("$mainUrl//")
+            fixUrl(it)
         } ?: document.selectFirst("video")?.attr("poster")?.let {
-            if (it.startsWith("http")) it else "$mainUrl/$it".removePrefix("$mainUrl//")
+            fixUrl(it)
         }
         
         // Extract description
@@ -186,7 +189,8 @@ class Catsuka : MainAPI() {
             
             // Try to find episode list
             document.select("a[href*='/player/'], a[href*='/videos/']").forEach { episodeLink ->
-                val epUrl = fixUrl(episodeLink.attr("href")) ?: return@forEach
+                val epHref = episodeLink.attr("href").takeIf { it.isNotBlank() } ?: return@forEach
+                val epUrl = fixUrl(epHref)
                 val epTitle = episodeLink.text().trim().takeIf { it.isNotBlank() }
                     ?: episodeLink.selectFirst("img")?.attr("alt")
                     ?: "Episode"
@@ -243,8 +247,8 @@ class Catsuka : MainAPI() {
                 // First, look for iframe
                 val iframe = document.selectFirst("iframe[src]")
                 if (iframe != null) {
-                    val iframeSrc = fixUrl(iframe.attr("src"))
-                    if (loadExtractor(iframeSrc, subtitleCallback, callback)) {
+                    val iframeSrc = iframe.attr("src").takeIf { it.isNotBlank() }?.let { fixUrl(it) }
+                    if (iframeSrc != null && loadExtractor(iframeSrc, subtitleCallback, callback)) {
                         return true
                     }
                 }
@@ -252,17 +256,17 @@ class Catsuka : MainAPI() {
                 // Look for video element
                 val video = document.selectFirst("video source[src]")
                 if (video != null) {
-                    val videoSrc = fixUrl(video.attr("src"))
-                    callback.invoke(
-                        ExtractorLink(
-                            this.name,
-                            this.name,
-                            videoSrc,
-                            referer = mainUrl,
-                            quality = Qualities.Unknown.value
+                    val videoSrc = video.attr("src").takeIf { it.isNotBlank() }?.let { fixUrl(it) }
+                    if (videoSrc != null) {
+                        callback.invoke(
+                            newExtractorLink(videoSrc) {
+                                this.name = this@Catsuka.name
+                                this.referer = mainUrl
+                                this.quality = Qualities.Unknown.value
+                            }
                         )
-                    )
-                    return true
+                        return true
+                    }
                 }
                 
                 // Look for YouTube embeds
@@ -298,8 +302,8 @@ class Catsuka : MainAPI() {
         }
     }
     
-    private fun fixUrl(url: String): String? {
-        if (url.isBlank()) return null
+    private fun fixUrl(url: String): String {
+        if (url.isBlank()) return ""
         return when {
             url.startsWith("http") -> url
             url.startsWith("//") -> "https:$url"
