@@ -70,7 +70,7 @@ class VimeoExtractor : ExtractorApi() {
                                     }
                                 }?.quality ?: "Unknown"
                                 
-                                callback(
+                                callback.invoke(
                                     ExtractorLink(
                                         source = name,
                                         name = "Vimeo DASH - $quality",
@@ -93,6 +93,7 @@ class VimeoExtractor : ExtractorApi() {
                 }
             }
         } catch (e: Exception) {
+            e.printStackTrace()
             // Try fallback method
         }
         
@@ -124,11 +125,12 @@ class VimeoExtractor : ExtractorApi() {
                 }
             }
         } catch (e: Exception) {
+            e.printStackTrace()
             // Continue to final fallback
         }
         
         // Final fallback: Embed URL
-        callback(
+        callback.invoke(
             ExtractorLink(
                 source = name,
                 name = "Vimeo Embed",
