@@ -1,9 +1,7 @@
 package com.catsuka.provider
 
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.fasterxml.jackson.annotation.JsonProperty
 
 class VimeoExtractor : ExtractorApi() {
@@ -16,19 +14,17 @@ class VimeoExtractor : ExtractorApi() {
         referer: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ) {
+    ): Boolean {
         val videoId = url.substringAfterLast("/").substringBefore("?")
         
-        try {
+        return try {
             val configUrl = "https://player.vimeo.com/video/$videoId/config"
-            val response = app.get(configUrl, headers = mapOf(
-                "Referer" to referer ?: "https://www.catsuka.com/",
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            ))
+            val response = app.get(configUrl, referer = referer)
             
             if (response.isSuccessful) {
-                val json = tryParseJson<VimeoConfig>(response.text)
+                val json = response.parsedSafe<VimeoConfig>()
                 val files = json?.request?.files
+                var hasLinks = false
                 
                 // First try progressive MP4s
                 files?.progressive?.forEach { video ->
@@ -36,6 +32,7 @@ class VimeoExtractor : ExtractorApi() {
                     val videoUrl = video.url
                     
                     if (videoUrl != null) {
+                        hasLinks = true
                         callback.invoke(
                             newExtractorLink(
                                 source = name,
@@ -51,21 +48,20 @@ class VimeoExtractor : ExtractorApi() {
                 
                 // Then try HLS (usually higher quality)
                 files?.hls?.url?.let { hlsUrl ->
+                    hasLinks = true
                     M3u8Helper.generateM3u8(
-                        name,
-                        hlsUrl,
-                        referer ?: "https://vimeo.com/",
-                        headers = mapOf(
-                            "Referer" to referer ?: "https://www.catsuka.com/",
-                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                        )
+                        sourceName = name,
+                        streamUrl = hlsUrl,
+                        referer = referer ?: "https://vimeo.com/"
                     ).forEach(callback)
                 }
                 
                 // If we found links, return success
-                return
+                if (hasLinks) {
+                    return true
+                }
             }
-        } catch (e: Exception) {
+            
             // Fallback to direct embed
             callback.invoke(
                 newExtractorLink(
@@ -76,18 +72,20 @@ class VimeoExtractor : ExtractorApi() {
                     this.referer = "https://vimeo.com/"
                 }
             )
+            true
+        } catch (e: Exception) {
+            // Ultimate fallback: direct player URL
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = "Vimeo Player",
+                    url = "https://player.vimeo.com/video/$videoId"
+                ) {
+                    this.referer = "https://vimeo.com/"
+                }
+            )
+            true
         }
-        
-        // Ultimate fallback: direct player URL
-        callback.invoke(
-            newExtractorLink(
-                source = name,
-                name = "Vimeo Player",
-                url = "https://player.vimeo.com/video/$videoId"
-            ) {
-                this.referer = "https://vimeo.com/"
-            }
-        )
     }
     
     private fun getQualityFromName(quality: String): Int {
