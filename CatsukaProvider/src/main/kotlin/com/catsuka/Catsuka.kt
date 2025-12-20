@@ -186,7 +186,6 @@ class Catsuka : MainAPI() {
                                 val videoId = youtubeMatch.groupValues[1]
                                 val youtubeUrl = "https://www.youtube.com/watch?v=$videoId"
                                 
-                                // CloudStream's YouTube extractor will handle qualities
                                 if (loadExtractor(youtubeUrl, subtitleCallback, callback)) {
                                     return true
                                 }
@@ -200,81 +199,21 @@ class Catsuka : MainAPI() {
                     }
                 }
                 
-                // Look for direct video element - SIMPLE FIXED VERSION
+                // Look for direct video element
                 val video = document.selectFirst("video source[src]")
                 if (video != null) {
                     val videoSrc = video.attr("src").takeIf { it.isNotBlank() }
-                        ?.let { src ->
-                            when {
-                                src.startsWith("http") -> src
-                                src.startsWith("//") -> "https:$src"
-                                src.startsWith("/") -> "$mainUrl$src"
-                                else -> "$mainUrl/$src"
-                            }
-                        }
+                        ?.let { if (it.startsWith("http")) it else "https:$it" }
                     
                     if (videoSrc != null) {
-                        // Determine quality from URL
-                        val quality = determineQualityFromUrl(videoSrc)
-                        val qualityName = when (quality) {
-                            Qualities.P2160.value -> "4K"
-                            Qualities.P1440.value -> "1440p"
-                            Qualities.P1080.value -> "1080p"
-                            Qualities.P720.value -> "720p"
-                            Qualities.P480.value -> "480p"
-                            Qualities.P360.value -> "360p"
-                            Qualities.P240.value -> "240p"
-                            else -> "Unknown"
-                        }
-                        
                         callback.invoke(
                             newExtractorLink(
                                 source = name,
-                                name = "Direct Video - $qualityName",
+                                name = "Direct Video",
                                 url = videoSrc
                             ) {
                                 this.referer = mainUrl
-                                this.quality = quality
-                            }
-                        )
-                        return true
-                    }
-                }
-                
-                // Look for video tag with direct src attribute
-                val videoTag = document.selectFirst("video[src]")
-                if (videoTag != null) {
-                    val videoSrc = videoTag.attr("src").takeIf { it.isNotBlank() }
-                        ?.let { src ->
-                            when {
-                                src.startsWith("http") -> src
-                                src.startsWith("//") -> "https:$src"
-                                src.startsWith("/") -> "$mainUrl$src"
-                                else -> "$mainUrl/$src"
-                            }
-                        }
-                    
-                    if (videoSrc != null) {
-                        val quality = determineQualityFromUrl(videoSrc)
-                        val qualityName = when (quality) {
-                            Qualities.P2160.value -> "4K"
-                            Qualities.P1440.value -> "1440p"
-                            Qualities.P1080.value -> "1080p"
-                            Qualities.P720.value -> "720p"
-                            Qualities.P480.value -> "480p"
-                            Qualities.P360.value -> "360p"
-                            Qualities.P240.value -> "240p"
-                            else -> "Unknown"
-                        }
-                        
-                        callback.invoke(
-                            newExtractorLink(
-                                source = name,
-                                name = "Direct Video - $qualityName",
-                                url = videoSrc
-                            ) {
-                                this.referer = mainUrl
-                                this.quality = quality
+                                this.quality = Qualities.Unknown.value
                             }
                         )
                         return true
@@ -315,24 +254,7 @@ class Catsuka : MainAPI() {
             
             false
         } catch (e: Exception) {
-            e.printStackTrace()
             false
-        }
-    }
-    
-    // Helper function to determine quality from URL/filename
-    private fun determineQualityFromUrl(url: String): Int {
-        val urlLower = url.lowercase()
-        
-        return when {
-            urlLower.contains("4k") || urlLower.contains("2160") -> Qualities.P2160.value
-            urlLower.contains("1440") || urlLower.contains("2k") -> Qualities.P1440.value
-            urlLower.contains("1080") || urlLower.contains("fullhd") -> Qualities.P1080.value
-            urlLower.contains("720") || urlLower.contains("hd") -> Qualities.P720.value
-            urlLower.contains("480") || urlLower.contains("sd") -> Qualities.P480.value
-            urlLower.contains("360") -> Qualities.P360.value
-            urlLower.contains("240") -> Qualities.P240.value
-            else -> Qualities.Unknown.value
         }
     }
     
