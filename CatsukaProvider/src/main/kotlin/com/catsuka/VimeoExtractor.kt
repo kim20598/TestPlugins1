@@ -4,7 +4,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import org.jsoup.Jsoup
 
 class VimeoExtractor : ExtractorApi() {
     override val name = "CatsukaVimeo"
@@ -17,10 +16,10 @@ class VimeoExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val videoId = url.substringAfterLast("/").substringBefore("?")
-        
         try {
-            // Try to get the player page
+            val videoId = url.substringAfterLast("/").substringBefore("?")
+            
+            // Get the player page to extract the config
             val playerUrl = "https://player.vimeo.com/video/$videoId"
             val response = app.get(playerUrl, headers = mapOf(
                 "Referer" to (referer ?: "https://www.catsuka.com/"),
@@ -30,30 +29,16 @@ class VimeoExtractor : ExtractorApi() {
             if (response.isSuccessful) {
                 val html = response.text
                 
-                // Extract the playerConfig JSON from the script tag
-                val playerConfigMatch = Regex("window\\.playerConfig\\s*=\\s*(\\{.*?\\})\\s*;", RegexOption.DOT_MATCHES_ALL)
-                    .find(html)
+                // Extract the window.playerConfig JSON
+                val regex = Regex("""window\.playerConfig\s*=\s*(\{.*?\})\s*;""", RegexOption.DOT_MATCHES_ALL)
+                val match = regex.find(html)
                 
-                if (playerConfigMatch != null) {
-                    val jsonText = playerConfigMatch.groupValues[1]
+                if (match != null) {
+                    val jsonText = match.groupValues[1]
                     val json = tryParseJson<VimeoPlayerConfig>(jsonText)
                     
                     json?.request?.files?.let { files ->
-                        // Process DASH streams
-                        files.dash?.cdns?.values?.firstOrNull()?.url?.let { dashUrl ->
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = name,
-                                    name = "Vimeo DASH",
-                                    url = dashUrl,
-                                    referer = "https://vimeo.com/"
-                                ) {
-                                    this.quality = Qualities.P1080.value
-                                }
-                            )
-                        }
-                        
-                        // Process HLS streams
+                        // Get HLS stream (most reliable)
                         files.hls?.cdns?.values?.firstOrNull()?.url?.let { hlsUrl ->
                             M3u8Helper.generateM3u8(
                                 source = name,
@@ -65,16 +50,32 @@ class VimeoExtractor : ExtractorApi() {
                                     "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
                                 )
                             ).forEach(callback)
+                            return
+                        }
+                        
+                        // Fallback to DASH stream
+                        files.dash?.cdns?.values?.firstOrNull()?.url?.let { dashUrl ->
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = name,
+                                    name = "Vimeo DASH",
+                                    url = dashUrl,
+                                    referer = "https://vimeo.com/"
+                                ) {
+                                    this.quality = Qualities.P1080.value
+                                }
+                            )
+                            return
                         }
                     }
-                    return
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
         
-        // Fallback to embed URL
+        // Ultimate fallback: Use the embed URL directly
+        val videoId = url.substringAfterLast("/").substringBefore("?")
         callback.invoke(
             newExtractorLink(
                 source = name,
