@@ -14,17 +14,16 @@ class VimeoExtractor : ExtractorApi() {
         referer: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ): Boolean {
+    ) {
         val videoId = url.substringAfterLast("/").substringBefore("?")
         
-        return try {
+        try {
             val configUrl = "https://player.vimeo.com/video/$videoId/config"
             val response = app.get(configUrl, referer = referer)
             
             if (response.isSuccessful) {
                 val json = response.parsedSafe<VimeoConfig>()
                 val files = json?.request?.files
-                var hasLinks = false
                 
                 // First try progressive MP4s
                 files?.progressive?.forEach { video ->
@@ -32,7 +31,6 @@ class VimeoExtractor : ExtractorApi() {
                     val videoUrl = video.url
                     
                     if (videoUrl != null) {
-                        hasLinks = true
                         callback.invoke(
                             newExtractorLink(
                                 source = name,
@@ -48,44 +46,28 @@ class VimeoExtractor : ExtractorApi() {
                 
                 // Then try HLS (usually higher quality)
                 files?.hls?.url?.let { hlsUrl ->
-                    hasLinks = true
                     M3u8Helper.generateM3u8(
-                        sourceName = name,
+                        source = name,
                         streamUrl = hlsUrl,
                         referer = referer ?: "https://vimeo.com/"
                     ).forEach(callback)
                 }
-                
-                // If we found links, return success
-                if (hasLinks) {
-                    return true
-                }
+                return
             }
-            
-            // Fallback to direct embed
-            callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name = "Vimeo Embed",
-                    url = "https://player.vimeo.com/video/$videoId"
-                ) {
-                    this.referer = "https://vimeo.com/"
-                }
-            )
-            true
         } catch (e: Exception) {
-            // Ultimate fallback: direct player URL
-            callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name = "Vimeo Player",
-                    url = "https://player.vimeo.com/video/$videoId"
-                ) {
-                    this.referer = "https://vimeo.com/"
-                }
-            )
-            true
+            // Fallback to direct embed
         }
+        
+        // Ultimate fallback: direct player URL
+        callback.invoke(
+            newExtractorLink(
+                source = name,
+                name = "Vimeo Player",
+                url = "https://player.vimeo.com/video/$videoId"
+            ) {
+                this.referer = "https://vimeo.com/"
+            }
+        )
     }
     
     private fun getQualityFromName(quality: String): Int {
