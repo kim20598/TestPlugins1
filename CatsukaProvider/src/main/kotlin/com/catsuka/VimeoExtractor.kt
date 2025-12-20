@@ -91,7 +91,7 @@ class VimeoExtractor : ExtractorApi() {
             quality.contains("1440", true) -> Qualities.P1440.value
             quality.contains("1080", true) -> Qualities.P1080.value
             quality.contains("720", true) -> Qualities.P720.value
-            quality.contains("540", true) -> Qualities.P540.value
+            // Removed P540 - doesn't exist
             quality.contains("480", true) -> Qualities.P480.value
             quality.contains("360", true) -> Qualities.P360.value
             quality.contains("240", true) -> Qualities.P240.value
