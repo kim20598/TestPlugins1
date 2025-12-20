@@ -18,14 +18,14 @@ class Catsuka : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/player/" to "All Videos",
+        //"$mainUrl/player/" to "All Videos",
         "$mainUrl/player/highlights" to "Highlights",
         "$mainUrl/player/categorie/courtmetrage" to "Short films",
         "$mainUrl/player/categorie/pilote" to "Pilots",
-        "$mainUrl/player/highlights/" to "Highlights",
-        "$mainUrl/player/highlights/" to "Highlights",
-        "$mainUrl/player/highlights/" to "Highlights",
-        "$mainUrl/player/highlights/" to "Highlights",
+        "$mainUrl/player/categorie/episode" to "episode",
+        "$mainUrl/player/categorie/clip" to "Music videos",
+        "$mainUrl/player/categorie/cinematique" to "cinematic",
+        "$mainUrl/player/categorie/trailer" to "trailer",
         "$mainUrl/player/highlights/" to "Highlights",
         "$mainUrl/player/highlights/" to "Highlights",
         "$mainUrl/player/highlights/" to "Highlights",
@@ -284,4 +284,5 @@ class Catsuka : MainAPI() {
         }
     }
 }
+
 
