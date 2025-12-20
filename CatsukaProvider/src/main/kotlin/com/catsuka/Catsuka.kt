@@ -21,6 +21,7 @@ class Catsuka : MainAPI() {
     override val mainPage = mainPageOf(
         "$mainUrl/player/" to "All Videos",
         "$mainUrl/player/highlights/" to "Highlights",
+        "$mainUrl/player/categorie/courtmetrage" to "Short films",
         "$mainUrl/player/updates/" to "Updates"
     )
 
@@ -188,3 +189,4 @@ class Catsuka : MainAPI() {
         return url?.let { fixUrl(it) }
     }
 }
+
