@@ -272,13 +272,13 @@ class Catsuka : MainAPI() {
                 val episodeUrl = fixUrl(href)
                 val episodeTitle = link.text().trim().takeIf { it.isNotBlank() } ?: "Episode $episodeNum"
                 
+                // FIXED: Use newEpisode() instead of Episode constructor
                 episodes.add(
-                    Episode(
-                        data = episodeUrl,
-                        name = episodeTitle,
-                        episode = episodeNum,
-                        season = 1
-                    )
+                    newEpisode(episodeUrl) {
+                        this.name = episodeTitle
+                        this.episode = episodeNum
+                        this.season = 1
+                    }
                 )
                 episodeNum++
             }
@@ -286,13 +286,13 @@ class Catsuka : MainAPI() {
         
         // If no episodes found, at least add the current page as episode 1
         if (episodes.isEmpty() && url.contains("/videos/")) {
+            // FIXED: Use newEpisode() instead of Episode constructor
             episodes.add(
-                Episode(
-                    data = url,
-                    name = "Episode 1",
-                    episode = 1,
-                    season = 1
-                )
+                newEpisode(url) {
+                    this.name = "Episode 1"
+                    this.episode = 1
+                    this.season = 1
+                }
             )
         }
         
