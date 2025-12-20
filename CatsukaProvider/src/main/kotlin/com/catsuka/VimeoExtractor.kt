@@ -19,6 +19,65 @@ class VimeoExtractor : ExtractorApi() {
         val videoId = url.substringAfterLast("/").substringBefore("?")
         
         try {
+            // First, try to extract from the player page HTML (NEW IMPROVEMENT)
+            val playerUrl = "https://player.vimeo.com/video/$videoId"
+            val response = app.get(playerUrl, headers = mapOf(
+                "Referer" to (referer ?: "https://www.catsuka.com/"),
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            ))
+            
+            if (response.isSuccessful) {
+                val html = response.text
+                
+                // Try to extract window.playerConfig JSON
+                val regex = Regex("""window\.playerConfig\s*=\s*(\{.*?\})\s*;""", RegexOption.DOT_MATCHES_ALL)
+                val match = regex.find(html)
+                
+                if (match != null) {
+                    val jsonText = match.groupValues[1]
+                    val json = tryParseJson<VimeoPlayerConfig>(jsonText)
+                    
+                    json?.request?.files?.let { files ->
+                        // Extract HLS URLs from cdns
+                        files.hls?.cdns?.forEach { (cdnName, cdn) ->
+                            cdn.url?.let { hlsUrl ->
+                                M3u8Helper.generateM3u8(
+                                    source = name,
+                                    streamUrl = hlsUrl,
+                                    referer = "https://vimeo.com/",
+                                    headers = mapOf(
+                                        "Referer" to "https://vimeo.com/",
+                                        "Origin" to "https://player.vimeo.com"
+                                    )
+                                ).forEach(callback)
+                            }
+                        }
+                        
+                        // Extract DASH URLs
+                        files.dash?.cdns?.forEach { (cdnName, cdn) ->
+                            cdn.url?.let { dashUrl ->
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = name,
+                                        name = "Vimeo DASH",
+                                        url = dashUrl
+                                    ) {
+                                        this.referer = "https://vimeo.com/"
+                                        this.quality = Qualities.P1080.value
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    return
+                }
+            }
+        } catch (e: Exception) {
+            // Fall back to original method
+        }
+        
+        // ORIGINAL CODE (as fallback)
+        try {
             // Try Vimeo's player config API with proper headers
             val configUrl = "https://player.vimeo.com/video/$videoId/config"
             val response = app.get(
@@ -99,6 +158,33 @@ class VimeoExtractor : ExtractorApi() {
         }
     }
 
+    // NEW data classes for the improved JSON parsing
+    data class VimeoPlayerConfig(
+        @JsonProperty("request") val request: VimeoPlayerRequest? = null
+    )
+
+    data class VimeoPlayerRequest(
+        @JsonProperty("files") val files: VimeoPlayerFiles? = null
+    )
+
+    data class VimeoPlayerFiles(
+        @JsonProperty("dash") val dash: VimeoDash? = null,
+        @JsonProperty("hls") val hls: VimeoHls? = null
+    )
+
+    data class VimeoDash(
+        @JsonProperty("cdns") val cdns: Map<String, VimeoCdn>? = null
+    )
+
+    data class VimeoHls(
+        @JsonProperty("cdns") val cdns: Map<String, VimeoCdn>? = null
+    )
+
+    data class VimeoCdn(
+        @JsonProperty("url") val url: String? = null
+    )
+
+    // ORIGINAL data classes (keep for compatibility)
     data class VimeoConfig(
         @JsonProperty("request") val request: VimeoRequest? = null
     )
