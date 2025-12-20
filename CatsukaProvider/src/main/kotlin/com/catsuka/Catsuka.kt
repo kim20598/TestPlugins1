@@ -226,16 +226,8 @@ class Catsuka : MainAPI() {
                 val videoSrc = video?.attr("src")
                 if (videoSrc != null && videoSrc.isNotBlank()) {
                     val videoUrl = if (videoSrc.startsWith("http")) videoSrc else "$mainUrl/$videoSrc"
-                    // Use newExtractorLink instead of deprecated ExtractorLink constructor
-                    callback(
-                        ExtractorLink(
-                            source = name,
-                            name = name,
-                            url = videoUrl,
-                            referer = mainUrl,
-                            quality = Qualities.Unknown.value,
-                        )
-                    )
+                    // Use newExtractorLink function
+                    callback(newExtractorLink(videoUrl, name, mainUrl, Qualities.Unknown.value, false))
                     return true
                 }
                 
