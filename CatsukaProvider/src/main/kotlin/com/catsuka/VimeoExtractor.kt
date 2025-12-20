@@ -2,10 +2,9 @@ package com.catsuka.provider
 
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.utils.ExtractorApi
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.M3u8Helper
-import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.fasterxml.jackson.annotation.JsonProperty
 
 class VimeoExtractor : ExtractorApi() {
     override val name = "CatsukaVimeo"
@@ -27,52 +26,71 @@ class VimeoExtractor : ExtractorApi() {
             ))
             
             if (response.isSuccessful) {
-                val json = response.parsedSafe<Map<String, Any>>()
-                val files = (json?.get("request") as? Map<String, Any>)
-                    ?.get("files") as? Map<String, Any>
+                val json = tryParseJson<VimeoConfig>(response.text)
+                val files = json?.request?.files
                 
-                val progressive = files?.get("progressive") as? List<Map<String, Any>>
-                progressive?.forEach { video ->
-                    val quality = (video["quality"] as? String) ?: "360p"
-                    val videoUrl = video["url"] as? String
+                files?.progressive?.forEach { video ->
+                    val quality = video.quality ?: "360p"
+                    val videoUrl = video.url
                     
                     if (videoUrl != null) {
                         callback.invoke(
-                            ExtractorLink(
+                            newExtractorLink(
                                 source = name,
                                 name = "Vimeo - $quality",
-                                url = videoUrl,
-                                referer = "https://vimeo.com/",
-                                quality = Qualities.Unknown.value,
-                                isM3u8 = false
-                            )
+                                url = videoUrl
+                            ) {
+                                this.referer = "https://vimeo.com/"
+                                this.quality = getQualityFromName(quality)
+                            }
                         )
                     }
                 }
                 
-                val hls = files?.get("hls") as? Map<String, Any>
-                val hlsUrl = hls?.get("url") as? String
-                
-                if (hlsUrl != null) {
+                // Try HLS stream
+                files?.hls?.url?.let { hlsUrl ->
                     M3u8Helper.generateM3u8(
                         name,
                         hlsUrl,
                         "https://vimeo.com/",
-                        quality = Qualities.Unknown.value
+                        headers = mapOf("Referer" to "https://www.catsuka.com/")
                     ).forEach(callback)
                 }
             }
         } catch (e: Exception) {
+            // Fallback to direct embed
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = name,
-                    name = "Vimeo",
-                    url = "https://player.vimeo.com/video/$videoId",
-                    referer = "https://vimeo.com/",
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = false
-                )
+                    name = "Vimeo Embed",
+                    url = "https://player.vimeo.com/video/$videoId"
+                ) {
+                    this.referer = "https://vimeo.com/"
+                }
             )
         }
     }
+
+    // Data classes for Vimeo JSON parsing
+    data class VimeoConfig(
+        @JsonProperty("request") val request: VimeoRequest?
+    )
+
+    data class VimeoRequest(
+        @JsonProperty("files") val files: VimeoFiles?
+    )
+
+    data class VimeoFiles(
+        @JsonProperty("progressive") val progressive: List<ProgressiveVideo>?,
+        @JsonProperty("hls") val hls: HlsVideo?
+    )
+
+    data class ProgressiveVideo(
+        @JsonProperty("url") val url: String?,
+        @JsonProperty("quality") val quality: String?
+    )
+
+    data class HlsVideo(
+        @JsonProperty("url") val url: String?
+    )
 }
