@@ -154,38 +154,96 @@ class Catsuka : MainAPI() {
             if (data.startsWith("http")) {
                 val document = app.get(data).document
                 
-                // Look for iframe
+                // Look for iframe first (Vimeo, YouTube embeds)
                 val iframe = document.selectFirst("iframe[src]")
-                val iframeSrc = iframe?.attr("src")?.takeIf { it.isNotBlank() }
-                    ?.let { if (it.startsWith("http")) it else "https:$it" }
-                
-                if (iframeSrc != null && loadExtractor(iframeSrc, subtitleCallback, callback)) {
-                    return true
+                if (iframe != null) {
+                    val iframeSrc = iframe.attr("src").takeIf { it.isNotBlank() }
+                        ?.let { if (it.startsWith("http")) it else "https:$it" }
+                    
+                    if (iframeSrc != null) {
+                        // Check if it's Vimeo
+                        if (iframeSrc.contains("vimeo.com")) {
+                            // Extract Vimeo video ID
+                            val vimeoPattern = Regex("""vimeo\.com/(?:video/)?(\d+)""")
+                            val vimeoMatch = vimeoPattern.find(iframeSrc)
+                            if (vimeoMatch != null) {
+                                val videoId = vimeoMatch.groupValues[1]
+                                val vimeoUrl = "https://vimeo.com/$videoId"
+                                
+                                // Use your VimeoExtractor
+                                val extractor = VimeoExtractor()
+                                return extractor.getUrl(vimeoUrl, data, subtitleCallback, callback)
+                            }
+                        }
+                        
+                        // Check if it's YouTube
+                        if (iframeSrc.contains("youtube.com") || iframeSrc.contains("youtu.be")) {
+                            // Extract YouTube video ID
+                            val youtubePattern = Regex("""(?:youtube\.com/embed/|youtu\.be/|youtube\.com/watch\?v=)([A-Za-z0-9_-]{11})""")
+                            val youtubeMatch = youtubePattern.find(iframeSrc)
+                            if (youtubeMatch != null) {
+                                val videoId = youtubeMatch.groupValues[1]
+                                val youtubeUrl = "https://www.youtube.com/watch?v=$videoId"
+                                
+                                if (loadExtractor(youtubeUrl, subtitleCallback, callback)) {
+                                    return true
+                                }
+                            }
+                        }
+                        
+                        // Try loading the iframe source with extractor
+                        if (loadExtractor(iframeSrc, subtitleCallback, callback)) {
+                            return true
+                        }
+                    }
                 }
                 
-                // Look for video scripts
+                // Look for direct video element
+                val video = document.selectFirst("video source[src]")
+                if (video != null) {
+                    val videoSrc = video.attr("src").takeIf { it.isNotBlank() }
+                        ?.let { if (it.startsWith("http")) it else "https:$it" }
+                    
+                    if (videoSrc != null) {
+                        callback.invoke(
+                            newExtractorLink(
+                                source = name,
+                                name = "Direct Video",
+                                url = videoSrc
+                            ) {
+                                this.referer = mainUrl
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
+                        return true
+                    }
+                }
+                
+                // Look for Vimeo video ID in scripts (fallback)
                 val scripts = document.select("script")
                 for (script in scripts) {
                     val scriptText = script.html()
                     
-                    // Look for YouTube
+                    // Vimeo pattern
+                    val vimeoPattern = Regex("""vimeo\.com/(?:video/)?(\d+)""")
+                    val vimeoMatch = vimeoPattern.find(scriptText)
+                    if (vimeoMatch != null) {
+                        val videoId = vimeoMatch.groupValues[1]
+                        val vimeoUrl = "https://vimeo.com/$videoId"
+                        
+                        // Use your VimeoExtractor
+                        val extractor = VimeoExtractor()
+                        return extractor.getUrl(vimeoUrl, data, subtitleCallback, callback)
+                    }
+                    
+                    // YouTube pattern
                     val youtubePattern = Regex("""youtube\.com/embed/([A-Za-z0-9_-]{11})""")
                     val youtubeMatch = youtubePattern.find(scriptText)
                     if (youtubeMatch != null) {
                         val videoId = youtubeMatch.groupValues[1]
                         val youtubeUrl = "https://www.youtube.com/watch?v=$videoId"
+                        
                         if (loadExtractor(youtubeUrl, subtitleCallback, callback)) {
-                            return true
-                        }
-                    }
-                    
-                    // Look for Vimeo
-                    val vimeoPattern = Regex("""vimeo\.com/(\d+)""")
-                    val vimeoMatch = vimeoPattern.find(scriptText)
-                    if (vimeoMatch != null) {
-                        val videoId = vimeoMatch.groupValues[1]
-                        val vimeoUrl = "https://player.vimeo.com/video/$videoId"
-                        if (loadExtractor(vimeoUrl, subtitleCallback, callback)) {
                             return true
                         }
                     }
