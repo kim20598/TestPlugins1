@@ -70,14 +70,13 @@ class VimeoExtractor : ExtractorApi() {
                                     }
                                 }?.quality ?: "Unknown"
                                 
-                                callback.invoke(
-                                    newExtractorLink(
+                                callback(
+                                    ExtractorLink(
                                         source = name,
                                         name = "Vimeo DASH - $quality",
                                         url = dashUrl,
-                                        referer = "https://vimeo.com/"
-                                    ) {
-                                        this.quality = when (quality) {
+                                        referer = "https://vimeo.com/",
+                                        quality = when (quality) {
                                             "1080p" -> Qualities.P1080.value
                                             "720p" -> Qualities.P720.value
                                             "540p" -> Qualities.P480.value
@@ -85,7 +84,7 @@ class VimeoExtractor : ExtractorApi() {
                                             "240p" -> Qualities.P240.value
                                             else -> Qualities.Unknown.value
                                         }
-                                    }
+                                    )
                                 )
                             }
                         }
@@ -109,12 +108,11 @@ class VimeoExtractor : ExtractorApi() {
             if (configResponse.isSuccessful) {
                 val json = tryParseJson<Map<String, Any>>(configResponse.text)
                 
-                // Extract HLS URL
-                val hlsUrl = json
-                    ?.get("request") as? Map<String, Any>
-                    ?.get("files") as? Map<String, Any>
-                    ?.get("hls") as? Map<String, Any>
-                    ?.get("url") as? String
+                // Extract HLS URL - fixed syntax
+                val request = json?.get("request") as? Map<String, Any>
+                val files = request?.get("files") as? Map<String, Any>
+                val hls = files?.get("hls") as? Map<String, Any>
+                val hlsUrl = hls?.get("url") as? String
                 
                 if (hlsUrl != null) {
                     M3u8Helper.generateM3u8(
@@ -130,8 +128,8 @@ class VimeoExtractor : ExtractorApi() {
         }
         
         // Final fallback: Embed URL
-        callback.invoke(
-            newExtractorLink(
+        callback(
+            ExtractorLink(
                 source = name,
                 name = "Vimeo Embed",
                 url = "https://player.vimeo.com/video/$videoId",
