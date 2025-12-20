@@ -39,7 +39,10 @@ class Catsuka : MainAPI() {
         "$mainUrl/player/categorie/nanars" to "Junk",
         "$mainUrl/player/categorie/catsukatrailers" to "Movie Trailers",
         "$mainUrl/player/categorie/pilote" to "Pilots",
-        "$mainUrl/player/categorie/episode" to "Episodes"
+        "$mainUrl/player/categorie/episode" to "Episodes",
+        "$mainUrl/player/categorie/opening" to "Openings",
+        "$mainUrl/player/categorie/trailer" to "Trailers",
+        "$mainUrl/player/categorie/extrait" to "Excerpts"
     )
 
     override suspend fun getMainPage(
@@ -51,33 +54,16 @@ class Catsuka : MainAPI() {
             val document = app.get(url).document
             
             val items = when {
-                // Highlights page
-                url.contains("/highlight/") || url.contains("/highlights") -> {
-                    document.select(".swiper-slide, .item.video, div[style*='margin-bottom:20px']").mapNotNull { element ->
-                        parseHighlightOrCategory(element)
-                    }
-                }
-                // BINGE! page (TV series)
+                // BINGE! page (TV series) - special handling
                 url.contains("/binge/") -> {
                     document.select(".swiper-slide").mapNotNull { element ->
                         parseBingeItem(element)
                     }
                 }
-                // Categories or regular pages
+                // All other pages (Highlights, Categories, Updates, etc.)
                 else -> {
-                    // Try multiple selectors
-                    val items1 = document.select(".swiper-slide").mapNotNull { element ->
-                        parseSwiperSlide(element)
-                    }
-                    val items2 = document.select("div[style*='margin-bottom:20px']").mapNotNull { element ->
-                        parseSearchResult(element)
-                    }
-                    val items3 = document.select(".item.video").mapNotNull { element ->
-                        parseSwiperSlide(element)
-                    }
-                    
-                    // Combine all results
-                    (items1 + items2 + items3).distinctBy { it.url }
+                    // Try ALL possible selectors to catch different page structures
+                    parseAllVideoElements(document)
                 }
             }
             
@@ -86,6 +72,65 @@ class Catsuka : MainAPI() {
             e.printStackTrace()
             newHomePageResponse(request.name, emptyList())
         }
+    }
+    
+    // NEW: Parse all possible video elements from any page
+    private fun parseAllVideoElements(document: org.jsoup.nodes.Document): List<SearchResponse> {
+        val items = mutableListOf<SearchResponse>()
+        
+        // 1. Try .swiper-slide elements (most common)
+        document.select(".swiper-slide").forEach { element ->
+            parseSwiperSlide(element)?.let { items.add(it) }
+        }
+        
+        // 2. Try .item.video elements
+        document.select(".item.video").forEach { element ->
+            parseSwiperSlide(element)?.let { items.add(it) }
+        }
+        
+        // 3. Try search result divs
+        document.select("div[style*='margin-bottom:20px']").forEach { element ->
+            parseSearchResult(element)?.let { items.add(it) }
+        }
+        
+        // 4. Try any image with link that looks like a video
+        document.select("a img").forEach { img ->
+            val link = img.parent()?.tagName()?.takeIf { it == "a" }?.let { img.parent() } ?: return@forEach
+            val href = link.attr("href").takeIf { it.isNotBlank() } ?: return@forEach
+            
+            // Check if this looks like a video link (not just any link)
+            if (href.contains("/player/") || href.contains("/highlight/") || 
+                href.contains("/categorie/") || href.contains("/videos/")) {
+                
+                val fixedHref = fixUrl(href)
+                val title = img.attr("alt").takeIf { it.isNotBlank() } 
+                    ?: link.selectFirst("b, span, p")?.text()?.trim()
+                    ?: return@forEach
+                
+                val posterUrl = img.attr("src").takeIf { it.isNotBlank() }?.let { 
+                    if (it.startsWith("http")) it else "$mainUrl/$it".removePrefix("$mainUrl//")
+                }
+                
+                // Check if it's a TV series (contains /videos/ in URL)
+                val isTvSeries = fixedHref.contains("/videos/") && fixedHref.split("/").size > 6
+                
+                if (isTvSeries) {
+                    items.add(
+                        newTvSeriesSearchResponse(title, fixedHref) {
+                            this.posterUrl = posterUrl
+                        }
+                    )
+                } else {
+                    items.add(
+                        newAnimeSearchResponse(title, fixedHref) {
+                            this.posterUrl = posterUrl
+                        }
+                    )
+                }
+            }
+        }
+        
+        return items.distinctBy { it.url }
     }
 
     // Parse swiper slides from main pages
@@ -111,14 +156,23 @@ class Catsuka : MainAPI() {
             if (it.startsWith("http")) it else "$mainUrl/$it".removePrefix("$mainUrl//")
         }
         
-        return newAnimeSearchResponse(title, fixedHref) {
-            this.posterUrl = posterUrl
+        // Check if it's a TV series (contains /videos/ in URL)
+        val isTvSeries = fixedHref.contains("/videos/") && fixedHref.split("/").size > 6
+        
+        return if (isTvSeries) {
+            newTvSeriesSearchResponse(title, fixedHref) {
+                this.posterUrl = posterUrl
+            }
+        } else {
+            newAnimeSearchResponse(title, fixedHref) {
+                this.posterUrl = posterUrl
+            }
         }
     }
 
     // Parse search results (different structure!)
     private fun parseSearchResult(element: Element): SearchResponse? {
-        // In search results: <div class="gauche"><a><img></a></div>
+        // Get link
         val link = element.selectFirst("a") ?: return null
         val href = link.attr("href").takeIf { it.isNotBlank() } ?: return null
         val fixedHref = fixUrl(href)
@@ -133,34 +187,17 @@ class Catsuka : MainAPI() {
             if (it.startsWith("http")) it else "$mainUrl/$it".removePrefix("$mainUrl//")
         }
         
-        return newAnimeSearchResponse(title, fixedHref) {
-            this.posterUrl = posterUrl
-        }
-    }
-
-    // Parse highlight or category items
-    private fun parseHighlightOrCategory(element: Element): SearchResponse? {
-        // Get link
-        val link = element.selectFirst("a") ?: return null
-        val href = link.attr("href").takeIf { it.isNotBlank() } ?: return null
-        val fixedHref = fixUrl(href)
+        // Check if it's a TV series
+        val isTvSeries = fixedHref.contains("/videos/") && fixedHref.split("/").size > 6
         
-        // Get title
-        val title = when {
-            element.selectFirst("span") != null -> element.selectFirst("span")?.text()?.trim()
-            element.selectFirst("p") != null -> element.selectFirst("p")?.text()?.trim()
-            element.selectFirst("b") != null -> element.selectFirst("b")?.text()?.trim()
-            else -> null
-        } ?: return null
-        
-        // Get thumbnail
-        val img = element.selectFirst("img")
-        val posterUrl = img?.attr("src")?.let { 
-            if (it.startsWith("http")) it else "$mainUrl/$it".removePrefix("$mainUrl//")
-        }
-        
-        return newAnimeSearchResponse(title, fixedHref) {
-            this.posterUrl = posterUrl
+        return if (isTvSeries) {
+            newTvSeriesSearchResponse(title, fixedHref) {
+                this.posterUrl = posterUrl
+            }
+        } else {
+            newAnimeSearchResponse(title, fixedHref) {
+                this.posterUrl = posterUrl
+            }
         }
     }
 
@@ -272,7 +309,6 @@ class Catsuka : MainAPI() {
                 val episodeUrl = fixUrl(href)
                 val episodeTitle = link.text().trim().takeIf { it.isNotBlank() } ?: "Episode $episodeNum"
                 
-                // FIXED: Use newEpisode() instead of Episode constructor
                 episodes.add(
                     newEpisode(episodeUrl) {
                         this.name = episodeTitle
@@ -286,7 +322,6 @@ class Catsuka : MainAPI() {
         
         // If no episodes found, at least add the current page as episode 1
         if (episodes.isEmpty() && url.contains("/videos/")) {
-            // FIXED: Use newEpisode() instead of Episode constructor
             episodes.add(
                 newEpisode(url) {
                     this.name = "Episode 1"
