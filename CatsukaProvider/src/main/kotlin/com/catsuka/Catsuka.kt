@@ -170,9 +170,11 @@ class Catsuka : MainAPI() {
                                 val videoId = vimeoMatch.groupValues[1]
                                 val vimeoUrl = "https://vimeo.com/$videoId"
                                 
-                                // Use your VimeoExtractor
+                                // Use VimeoExtractor
                                 val extractor = VimeoExtractor()
-                                return extractor.getUrl(vimeoUrl, data, subtitleCallback, callback)
+                                if (extractor.getUrl(vimeoUrl, data, subtitleCallback, callback)) {
+                                    return true
+                                }
                             }
                         }
                         
@@ -231,9 +233,11 @@ class Catsuka : MainAPI() {
                         val videoId = vimeoMatch.groupValues[1]
                         val vimeoUrl = "https://vimeo.com/$videoId"
                         
-                        // Use your VimeoExtractor
+                        // Use VimeoExtractor
                         val extractor = VimeoExtractor()
-                        return extractor.getUrl(vimeoUrl, data, subtitleCallback, callback)
+                        if (extractor.getUrl(vimeoUrl, data, subtitleCallback, callback)) {
+                            return true
+                        }
                     }
                     
                     // YouTube pattern
