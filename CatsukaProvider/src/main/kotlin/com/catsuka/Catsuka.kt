@@ -17,13 +17,11 @@ class Catsuka : MainAPI() {
         TvType.OVA
     )
 
+    // Copy AnimeSuge pattern EXACTLY
     override val mainPage = mainPageOf(
         "$mainUrl/player/" to "All Videos",
-        "$mainUrl/player/updates/" to "New Entries",
         "$mainUrl/player/highlights/" to "Highlights",
-        "$mainUrl/player/binge/" to "Binge",
-        "$mainUrl/player/categorie/courtmetrage" to "Short Films",
-        "$mainUrl/player/categorie/clip" to "Music Videos"
+        "$mainUrl/player/updates/" to "Updates"
     )
 
     override suspend fun getMainPage(
@@ -34,48 +32,31 @@ class Catsuka : MainAPI() {
             val url = request.data + if (page > 1) "?page=$page" else ""
             val document = app.get(url).document
             
-            // Find all swiper containers for different sections
-            val swiperContainers = document.select(".swiper-container")
+            // Copy AnimeSuge's selector pattern
+            val home = document.select(".item, .anime-card, .card, .anime-poster, .poster, article, a")
+                .mapNotNull { it.toSearchResult() }
             
-            val home = mutableListOf<SearchResponse>()
-            
-            swiperContainers.forEach { container ->
-                // Get slides from each swiper
-                val slides = container.select(".swiper-slide")
-                slides.forEach { slide ->
-                    val searchResult = slide.toSearchResult()
-                    if (searchResult != null) {
-                        home.add(searchResult)
-                    }
-                }
-            }
-            
-            return newHomePageResponse(request.name, home.distinctBy { it.url }, hasNext = home.isNotEmpty())
+            return newHomePageResponse(request.name, home.distinctBy { it.url }, hasNext = true)
         } catch (e: Exception) {
             return newHomePageResponse(request.name, emptyList())
         }
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        // Look for the link element
-        val link = this.selectFirst("a[href]") ?: return null
-        val href = fixUrl(link.attr("href"))
-        
-        // Make sure it's a player link
-        if (!href.contains("/player/")) return null
-        
-        // Get title from span or p tag
-        val title = this.selectFirst("span, p")?.text()?.trim()
-            ?: link.selectFirst("img")?.attr("alt")?.trim()
-            ?: link.selectFirst("img")?.attr("title")?.trim()
+        // Look for title in multiple places like AnimeSuge does
+        val title = this.selectFirst(".name, .detail .name, h3, h4, img[alt], span")?.text()?.trim() 
+            ?: this.attr("title")
+            ?: this.attr("alt")
             ?: return null
-        
+            
         if (title.isBlank()) return null
         
-        // Get poster from image
+        val href = fixUrl(this.selectFirst("a")?.attr("href") ?: this.attr("href") ?: return null)
+        if (!href.contains("/player/")) return null
+        
         val posterUrl = fixUrlNull(
-            link.selectFirst("img")?.attr("src")
-            ?: link.selectFirst("img")?.attr("data-src")
+            this.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() }
+            ?: this.selectFirst("img")?.attr("data-src")
         )?.let { if (it.startsWith("http")) it else "$mainUrl$it" }
         
         return newAnimeSearchResponse(title, href) {
@@ -85,50 +66,15 @@ class Catsuka : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         return try {
-            // Catsuka uses POST search
+            // Catsuka uses POST search with "recherche" parameter
             val document = app.post(
                 "$mainUrl/player/?recherche",
                 data = mapOf("recherche" to query)
             ).document
             
-            // Look for search results - they might be in swiper slides
-            val results = mutableListOf<SearchResponse>()
-            
-            // Check swiper containers first
-            val swiperContainers = document.select(".swiper-container")
-            swiperContainers.forEach { container ->
-                val slides = container.select(".swiper-slide")
-                slides.forEach { slide ->
-                    val searchResult = slide.toSearchResult()
-                    if (searchResult != null) {
-                        results.add(searchResult)
-                    }
-                }
-            }
-            
-            // Also check for any direct links
-            val links = document.select("a[href*='/player/']").take(50)
-            links.forEach { link ->
-                val href = fixUrl(link.attr("href"))
-                if (href.contains("/player/") && !href.contains("/player/?recherche")) {
-                    val title = link.selectFirst("img")?.attr("alt")?.trim()
-                        ?: link.selectFirst("img")?.attr("title")?.trim()
-                        ?: link.text().trim()
-                    
-                    if (title.isNotBlank()) {
-                        val posterUrl = fixUrlNull(
-                            link.selectFirst("img")?.attr("src")
-                            ?: link.selectFirst("img")?.attr("data-src")
-                        )
-                        
-                        results.add(newAnimeSearchResponse(title, href) {
-                            this.posterUrl = posterUrl
-                        })
-                    }
-                }
-            }
-            
-            results.distinctBy { it.url }
+            document.select(".item, .anime-card, .card, .anime-poster, .poster, article, a")
+                .mapNotNull { it.toSearchResult() }
+                .distinctBy { it.url }
         } catch (e: Exception) {
             emptyList()
         }
@@ -138,57 +84,29 @@ class Catsuka : MainAPI() {
         return try {
             val document = app.get(url).document
             
-            // Get title
-            val title = document.selectFirst("h1.title, h1, .title, .caption span:first-child")?.text()?.trim()
-                ?: "Unknown Title"
-            
-            // Get poster - look in multiple places
-            val poster = fixUrlNull(
-                document.selectFirst(".poster img, .cover img, img[src*='vignettes']")?.attr("src")
-                ?: document.selectFirst("img[src*='vignettes']")?.attr("src")
-                ?: document.selectFirst("meta[property='og:image']")?.attr("content")
-            )
-            
-            // Get plot/description
+            val title = document.selectFirst("h1.title, h1, .title")?.text()?.trim() ?: "Unknown Title"
+            val poster = document.selectFirst(".poster img, [itemprop=image], .cover img, img")?.attr("src")
+                ?.let { if (it.startsWith("http")) it else "$mainUrl$it" }
             val plot = document.selectFirst(".description, .plot, .summary, p")?.text()?.trim()
             
-            // Check if it's a series (has episodes)
-            val hasEpisodes = url.contains("/videos/") && url.contains("/1")
+            // Check if it's a movie
+            val isMovie = true // Assume movie for now
             
-            if (hasEpisodes) {
-                // Parse episode count from URL or page
-                val episodeLinks = document.select("a[href*='/videos/']")
-                val episodes = mutableListOf<Episode>()
-                
-                // Try to find episode list
-                episodeLinks.forEachIndexed { index, link ->
-                    val epUrl = fixUrl(link.attr("href"))
-                    if (epUrl.contains("/videos/") && epUrl != url) {
-                        val epTitle = link.text().trim().ifBlank { "Episode ${index + 1}" }
-                        episodes.add(
-                            newEpisode(epUrl) {
-                                name = epTitle
-                                this.episode = index + 1
-                            }
-                        )
-                    }
-                }
-                
-                // If no episodes found, create dummy ones
-                if (episodes.isEmpty()) {
-                    episodes.add(newEpisode(url) {
-                        name = "Episode 1"
-                        this.episode = 1
-                    })
-                }
-                
-                newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
+            if (isMovie) {
+                newMovieLoadResponse(title, url, TvType.Movie, url) {
                     this.posterUrl = poster
                     this.plot = plot
                 }
             } else {
-                // It's a movie/single video
-                newMovieLoadResponse(title, url, TvType.Movie, url) {
+                // For series, create dummy episodes
+                val episodes = (1..10).map { episodeNum ->
+                    newEpisode(url) {
+                        name = "Episode $episodeNum"
+                        this.episode = episodeNum
+                    }
+                }
+                
+                newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
                     this.posterUrl = poster
                     this.plot = plot
                 }
@@ -218,17 +136,6 @@ class Catsuka : MainAPI() {
                     ?.let { if (it.startsWith("http")) it else "https:$it" }
                 
                 if (iframeSrc != null && loadExtractor(iframeSrc, subtitleCallback, callback)) {
-                    return true
-                }
-                
-                // Look for video elements
-                val video = document.selectFirst("video source")
-                val videoSrc = video?.attr("src")
-                if (videoSrc != null && videoSrc.isNotBlank()) {
-                    val videoUrl = if (videoSrc.startsWith("http")) videoSrc else "$mainUrl/$videoSrc"
-                    
-                    // Use newExtractorLink with the correct parameters
-                    callback(newExtractorLink(videoUrl, name, mainUrl, Qualities.Unknown.value))
                     return true
                 }
                 
