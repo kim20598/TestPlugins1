@@ -22,13 +22,15 @@ class VimeoExtractor : ExtractorApi() {
         try {
             val configUrl = "https://player.vimeo.com/video/$videoId/config"
             val response = app.get(configUrl, headers = mapOf(
-                "Referer" to "https://www.catsuka.com/"
+                "Referer" to referer ?: "https://www.catsuka.com/",
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             ))
             
             if (response.isSuccessful) {
                 val json = tryParseJson<VimeoConfig>(response.text)
                 val files = json?.request?.files
                 
+                // First try progressive MP4s
                 files?.progressive?.forEach { video ->
                     val quality = video.quality ?: "360p"
                     val videoUrl = video.url
@@ -47,15 +49,21 @@ class VimeoExtractor : ExtractorApi() {
                     }
                 }
                 
-                // Try HLS stream
+                // Then try HLS (usually higher quality)
                 files?.hls?.url?.let { hlsUrl ->
                     M3u8Helper.generateM3u8(
                         name,
                         hlsUrl,
-                        "https://vimeo.com/",
-                        headers = mapOf("Referer" to "https://www.catsuka.com/")
+                        referer ?: "https://vimeo.com/",
+                        headers = mapOf(
+                            "Referer" to referer ?: "https://www.catsuka.com/",
+                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                        )
                     ).forEach(callback)
                 }
+                
+                // If we found links, return success
+                return
             }
         } catch (e: Exception) {
             // Fallback to direct embed
@@ -68,6 +76,30 @@ class VimeoExtractor : ExtractorApi() {
                     this.referer = "https://vimeo.com/"
                 }
             )
+        }
+        
+        // Ultimate fallback: direct player URL
+        callback.invoke(
+            newExtractorLink(
+                source = name,
+                name = "Vimeo Player",
+                url = "https://player.vimeo.com/video/$videoId"
+            ) {
+                this.referer = "https://vimeo.com/"
+            }
+        )
+    }
+    
+    private fun getQualityFromName(quality: String): Int {
+        return when {
+            quality.contains("4k", true) -> Qualities.P2160.value
+            quality.contains("2k", true) -> Qualities.P1440.value
+            quality.contains("1080", true) -> Qualities.P1080.value
+            quality.contains("720", true) -> Qualities.P720.value
+            quality.contains("480", true) -> Qualities.P480.value
+            quality.contains("360", true) -> Qualities.P360.value
+            quality.contains("240", true) -> Qualities.P240.value
+            else -> Qualities.Unknown.value
         }
     }
 
