@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
+import java.net.URI
 
 class KooraLite : MainAPI() {
     override var mainUrl = "https://www.fullmatch-hd.com"
@@ -201,7 +202,19 @@ class KooraLite : MainAPI() {
             val mainDoc = app.get(url).document
             
             // =====================================
-            // STEP 2: Extract ALL server links from the menu
+            // STEP 2: Extract the base domain from the current URL
+            // =====================================
+            val baseDomain = try {
+                val uri = URI(url)
+                "${uri.scheme}://${uri.host}"
+            } catch (e: Exception) {
+                // Fallback: try to extract domain from URL
+                val domainRegex = Regex("""(https?://[^/]+)""")
+                domainRegex.find(url)?.groupValues?.get(1) ?: "https://b.sia.watch"
+            }
+            
+            // =====================================
+            // STEP 3: Extract ALL server links from the menu
             // =====================================
             val serverLinks = mainDoc.select(".aplr-menu a.aplr-link")
             val servers = mutableListOf<Pair<String, String>>()
@@ -214,9 +227,9 @@ class KooraLite : MainAPI() {
                     // Fix the URL if needed
                     if (!serverHref.startsWith("http")) {
                         serverHref = if (serverHref.startsWith("/")) {
-                            "https://c.sia.watch$serverHref"
+                            "$baseDomain$serverHref"
                         } else {
-                            "https://c.sia.watch/$serverHref"
+                            "$baseDomain/$serverHref"
                         }
                     }
                     servers.add(Pair(serverName, serverHref))
@@ -224,7 +237,7 @@ class KooraLite : MainAPI() {
             }
             
             // =====================================
-            // STEP 3: Process EACH server to get its stream
+            // STEP 4: Process EACH server to get its stream
             // =====================================
             for ((serverName, serverUrl) in servers) {
                 try {
@@ -271,7 +284,7 @@ class KooraLite : MainAPI() {
             }
             
             // =====================================
-            // STEP 4: Also get the stream from MAIN page as fallback
+            // STEP 5: Also get the stream from MAIN page as fallback
             // =====================================
             if (!foundAnyLink) {
                 val mainScripts = mainDoc.select("script").html()
