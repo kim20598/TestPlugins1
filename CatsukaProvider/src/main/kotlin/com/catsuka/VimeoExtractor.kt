@@ -19,7 +19,7 @@ class VimeoExtractor : ExtractorApi() {
         val videoId = url.substringAfterLast("/").substringBefore("?")
         
         try {
-            // Get player page with browser-like headers
+            // Get player page with proper headers
             val playerUrl = "https://player.vimeo.com/video/$videoId"
             val response = app.get(playerUrl, headers = mapOf(
                 "Referer" to (referer ?: "https://www.catsuka.com/"),
@@ -37,7 +37,7 @@ class VimeoExtractor : ExtractorApi() {
             if (response.isSuccessful) {
                 val html = response.text
                 
-                // Extract window.playerConfig JSON - THE KEY TO ALL VIMEO VIDEOS
+                // Extract window.playerConfig JSON
                 val regex = Regex("""window\.playerConfig\s*=\s*(\{.*?\})\s*;""", RegexOption.DOT_MATCHES_ALL)
                 val match = regex.find(html)
                 
@@ -45,7 +45,7 @@ class VimeoExtractor : ExtractorApi() {
                     val jsonText = match.groupValues[1]
                     val json = tryParseJson<VimeoPlayerConfig>(jsonText)
                     
-                    // Get quality information from streams
+                    // Get quality information
                     val qualityMap = mutableMapOf<String, String>()
                     json?.request?.files?.dash?.streams?.forEach { stream ->
                         stream.id?.let { id ->
@@ -55,9 +55,8 @@ class VimeoExtractor : ExtractorApi() {
                         }
                     }
                     
-                    // Send HLS streams (M3U8) - most compatible
+                    // Send HLS streams
                     json?.request?.files?.hls?.cdns?.forEach { (cdnName, cdn) ->
-                        // Regular HLS URL
                         cdn.url?.let { hlsUrl ->
                             M3u8Helper.generateM3u8(
                                 source = name,
@@ -70,25 +69,10 @@ class VimeoExtractor : ExtractorApi() {
                                 )
                             ).forEach(callback)
                         }
-                        
-                        // AVC-only HLS URL (best compatibility)
-                        cdn.avcUrl?.let { avcHlsUrl ->
-                            M3u8Helper.generateM3u8(
-                                source = "$name (AVC)",
-                                streamUrl = avcHlsUrl,
-                                referer = "https://vimeo.com/",
-                                headers = mapOf(
-                                    "Referer" to "https://vimeo.com/",
-                                    "Origin" to "https://player.vimeo.com",
-                                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                                )
-                            ).forEach(callback)
-                        }
                     }
                     
-                    // Send DASH streams (MPD)
+                    // Send DASH streams
                     json?.request?.files?.dash?.cdns?.forEach { (cdnName, cdn) ->
-                        // Regular DASH URL
                         cdn.url?.let { dashUrl ->
                             val quality = qualityMap.values.firstOrNull() ?: "1080p"
                             newExtractorLink(
@@ -100,29 +84,16 @@ class VimeoExtractor : ExtractorApi() {
                                 this.quality = getQuality(quality)
                             }?.let { callback(it) }
                         }
-                        
-                        // AVC-only DASH URL (best compatibility)
-                        cdn.avcUrl?.let { avcDashUrl ->
-                            val quality = qualityMap.values.firstOrNull() ?: "1080p"
-                            newExtractorLink(
-                                source = "$name (AVC)",
-                                name = "Vimeo DASH AVC - $quality",
-                                url = avcDashUrl
-                            ) {
-                                this.referer = "https://vimeo.com/"
-                                this.quality = getQuality(quality)
-                            }?.let { callback(it) }
-                        }
                     }
                     
-                    return // Success - we extracted real video URLs
+                    return // Success
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
         
-        // Fallback if extraction fails
+        // Fallback
         newExtractorLink(
             source = name,
             name = "Vimeo Embed",
@@ -134,12 +105,12 @@ class VimeoExtractor : ExtractorApi() {
     
     private fun getQuality(quality: String): Int {
         return when {
-            quality.contains("4k", true) || quality.contains("2160", true) -> Qualities.P2160.value
-            quality.contains("1440", true) || quality.contains("2k", true) -> Qualities.P1440.value
-            quality.contains("1080", true) || quality.contains("fullhd", true) -> Qualities.P1080.value
-            quality.contains("720", true) || quality.contains("hd", true) -> Qualities.P720.value
-            quality.contains("540", true) -> 540  // Custom value for 540p
-            quality.contains("480", true) || quality.contains("sd", true) -> Qualities.P480.value
+            quality.contains("4k", true) -> Qualities.P2160.value
+            quality.contains("1440", true) -> Qualities.P1440.value
+            quality.contains("1080", true) -> Qualities.P1080.value
+            quality.contains("720", true) -> Qualities.P720.value
+            quality.contains("540", true) -> 540
+            quality.contains("480", true) -> Qualities.P480.value
             quality.contains("360", true) -> Qualities.P360.value
             quality.contains("240", true) -> Qualities.P240.value
             else -> Qualities.Unknown.value
@@ -170,14 +141,11 @@ class VimeoExtractor : ExtractorApi() {
 
     data class VimeoCdn(
         @JsonProperty("url") val url: String? = null,
-        @JsonProperty("avc_url") val avcUrl: String? = null,
-        @JsonProperty("origin") val origin: String? = null
+        @JsonProperty("avc_url") val avcUrl: String? = null
     )
 
     data class VimeoStream(
         @JsonProperty("id") val id: String? = null,
-        @JsonProperty("quality") val quality: String? = null,
-        @JsonProperty("fps") val fps: Int? = null,
-        @JsonProperty("profile") val profile: String? = null
+        @JsonProperty("quality") val quality: String? = null
     )
 }
