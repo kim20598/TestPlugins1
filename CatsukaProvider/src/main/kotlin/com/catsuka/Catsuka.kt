@@ -321,7 +321,7 @@ class Catsuka : MainAPI() {
         }
     }
 
-    // FIXED: Using newExtractorLink instead of deprecated constructor
+    // SIMPLIFIED loadLinks function
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -336,10 +336,8 @@ class Catsuka : MainAPI() {
             if (vimeoIframe != null) {
                 val iframeSrc = vimeoIframe.attr("src")
                 if (iframeSrc.isNotBlank()) {
-                    // Get Vimeo video ID
                     val videoId = iframeSrc.substringAfter("video/").substringBefore("?").substringBefore("#")
                     if (videoId.isNotBlank()) {
-                        // Use Cloudstream's built-in Vimeo extractor
                         loadExtractor("https://vimeo.com/$videoId", subtitleCallback, callback)
                         return true
                     }
@@ -379,17 +377,16 @@ class Catsuka : MainAPI() {
                     }
                     
                     val quality = determineQualityFromUrl(fullUrl)
+                    val isM3u8 = videoSrc.contains(".m3u8")
                     
                     callback.invoke(
                         newExtractorLink(
                             source = name,
                             name = "Direct Video",
                             url = fullUrl,
-                            referer = "$mainUrl/"
-                        ) {
-                            this.quality = quality
-                            this.isM3u8 = videoSrc.contains(".m3u8")
-                        }
+                            quality = quality,
+                            isM3u8 = isM3u8
+                        )
                     )
                     return true
                 }
