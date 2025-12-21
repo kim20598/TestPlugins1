@@ -321,7 +321,7 @@ class Catsuka : MainAPI() {
         }
     }
 
-    // FIXED: SIMPLE VIMEO EXTRACTION THAT ACTUALLY WORKS
+    // FIXED: Using newExtractorLink instead of deprecated constructor
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -381,14 +381,15 @@ class Catsuka : MainAPI() {
                     val quality = determineQualityFromUrl(fullUrl)
                     
                     callback.invoke(
-                        ExtractorLink(
-                            name,
-                            "Direct Video",
-                            fullUrl,
-                            "$mainUrl/",
-                            quality,
-                            videoSrc.contains(".m3u8")
-                        )
+                        newExtractorLink(
+                            source = name,
+                            name = "Direct Video",
+                            url = fullUrl,
+                            referer = "$mainUrl/"
+                        ) {
+                            this.quality = quality
+                            this.isM3u8 = videoSrc.contains(".m3u8")
+                        }
                     )
                     return true
                 }
