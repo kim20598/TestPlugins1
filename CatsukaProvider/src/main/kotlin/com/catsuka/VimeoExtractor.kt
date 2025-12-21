@@ -18,25 +18,29 @@ class VimeoExtractor : ExtractorApi() {
     ) {
         val videoId = url.substringAfterLast("/").substringBefore("?")
         
-        // Try methods sequentially with proper error handling
-        val methods: List<suspend () -> Boolean> = listOf(
-            { extractFromPlayerPage(videoId, referer, callback) },
-            { extractFromConfigApi(videoId, referer, callback) },
-            { extractFromOEmbed(videoId, referer, callback) }
-        )
+        // Try multiple methods to extract Vimeo video
+        // Method 1: Try player page HTML
+        runCatching {
+            extractFromPlayerPage(videoId, referer, callback)
+        }.onSuccess { if (it) return }
         
-        for (method in methods) {
-            val success = runCatching { method() }.getOrElse { false }
-            if (success) return
-        }
+        // Method 2: Try config API
+        runCatching {
+            extractFromConfigApi(videoId, referer, callback)
+        }.onSuccess { if (it) return }
         
-        // Fallback to embed
+        // Method 3: Try oEmbed
+        runCatching {
+            extractFromOEmbed(videoId, referer, callback)
+        }.onSuccess { if (it) return }
+        
+        // Fallback to embed URL
         fallbackToEmbed(videoId, callback)
     }
     
     // Method 1: Extract from player page HTML
     private suspend fun extractFromPlayerPage(videoId: String, referer: String?, callback: (ExtractorLink) -> Unit): Boolean {
-        return runCatching {
+        return try {
             val playerUrl = "https://player.vimeo.com/video/$videoId"
             val response = app.get(playerUrl, headers = mapOf(
                 "Referer" to (referer ?: "https://www.catsuka.com/"),
@@ -87,14 +91,48 @@ class VimeoExtractor : ExtractorApi() {
                         }
                     }
                 }
+                
+                // Try alternative pattern for video URLs
+                val videoRegex = Regex("""(https?:[^"']+\.(?:m3u8|mp4)[^"']*)""")
+                val videoMatches = videoRegex.findAll(html)
+                
+                for (match in videoMatches) {
+                    var videoUrl = match.value
+                    videoUrl = videoUrl.replace("\\/", "/")
+                    
+                    if (videoUrl.contains(".m3u8")) {
+                        M3u8Helper.generateM3u8(
+                            source = name,
+                            streamUrl = videoUrl,
+                            referer = "https://vimeo.com/",
+                            headers = mapOf(
+                                "Referer" to "https://vimeo.com/",
+                                "Origin" to "https://player.vimeo.com"
+                            )
+                        ).forEach(callback)
+                        return true
+                    } else if (videoUrl.contains(".mp4")) {
+                        newExtractorLink(
+                            source = name,
+                            name = "Vimeo MP4",
+                            url = videoUrl
+                        ) {
+                            this.referer = "https://vimeo.com/"
+                            this.quality = Qualities.P1080.value
+                        }?.let { callback(it) }
+                        return true
+                    }
+                }
             }
             false
-        }.getOrElse { false }
+        } catch (e: Exception) {
+            false
+        }
     }
     
     // Method 2: Extract from config API
     private suspend fun extractFromConfigApi(videoId: String, referer: String?, callback: (ExtractorLink) -> Unit): Boolean {
-        return runCatching {
+        return try {
             val configUrl = "https://player.vimeo.com/video/$videoId/config"
             val response = app.get(
                 configUrl,
@@ -143,12 +181,14 @@ class VimeoExtractor : ExtractorApi() {
                 }
             }
             false
-        }.getOrElse { false }
+        } catch (e: Exception) {
+            false
+        }
     }
     
     // Method 3: Try oEmbed API
     private suspend fun extractFromOEmbed(videoId: String, referer: String?, callback: (ExtractorLink) -> Unit): Boolean {
-        return runCatching {
+        return try {
             val oembedUrl = "https://vimeo.com/api/oembed.json?url=https://vimeo.com/$videoId"
             val response = app.get(oembedUrl, headers = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -166,18 +206,20 @@ class VimeoExtractor : ExtractorApi() {
                     
                     if (iframeMatch != null) {
                         val iframeUrl = iframeMatch.groupValues[1]
-                        // Try to extract from this iframe URL
+                        // Try Method 1 again with this iframe URL
                         return extractFromPlayerPage(videoId, referer, callback)
                     }
                 }
             }
             false
-        }.getOrElse { false }
+        } catch (e: Exception) {
+            false
+        }
     }
     
     // Method 4: Fallback to embed
     private fun fallbackToEmbed(videoId: String, callback: (ExtractorLink) -> Unit): Boolean {
-        // Use the regular constructor here since this is not a suspend context
+        // Use ExtractorLink constructor (not newExtractorLink) since this is not suspend
         callback.invoke(
             ExtractorLink(
                 name = name,
