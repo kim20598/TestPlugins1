@@ -321,7 +321,7 @@ class Catsuka : MainAPI() {
         }
     }
 
-    // FIXED loadLinks function - Using lambda configuration correctly
+    @Suppress("DEPRECATION")
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -380,14 +380,14 @@ class Catsuka : MainAPI() {
                     val isM3u8 = videoSrc.contains(".m3u8")
                     
                     callback.invoke(
-                        newExtractorLink(
-                            source = name,
-                            name = "Direct Video",
-                            url = fullUrl
-                        ) {
-                            this.quality = quality
-                            this.isM3u8 = isM3u8
-                        }
+                        ExtractorLink(
+                            name,
+                            "Direct Video",
+                            fullUrl,
+                            "$mainUrl/",
+                            quality,
+                            isM3u8
+                        )
                     )
                     return true
                 }
