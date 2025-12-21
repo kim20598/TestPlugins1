@@ -226,7 +226,7 @@ class KooraLite : MainAPI() {
             } catch (e: Exception) {
                 // Fallback: try to extract domain from URL
                 val domainRegex = Regex("""(https?://[^/]+)""")
-                domainRegex.find(url)?.groupValues?.get(1) ?: "https://b.sia.watch"
+                domainRegex.find(url)?.groupValues?.get(1) ?: "https://lp.kooralive.cfd"
             }
             
             // =====================================
@@ -253,66 +253,25 @@ class KooraLite : MainAPI() {
             }
             
             // =====================================
-            // STEP 4: Process EACH albaplayer server to get its stream
+            // STEP 4: Process EACH server to get its stream
             // =====================================
+            val processedUrls = mutableSetOf<String>()
+            
+            // Process the current page first
+            processPageStream(url, "Current Page Stream", mainDoc, callback, processedUrls)?.let {
+                foundAnyLink = true
+            }
+            
+            // Process each server page
             for ((serverName, serverUrl) in servers) {
                 try {
                     // Fetch THIS server's page
                     val serverDoc = app.get(serverUrl).document
                     
-                    // Look for AlbaPlayerControl in THIS server's scripts
-                    val serverScripts = serverDoc.select("script").html()
-                    
-                    // Try to find AlbaPlayerControl with hls
-                    var regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
-                    var match = regex.find(serverScripts)
-                    
-                    // If not found, try with plyr
-                    if (match == null) {
-                        regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','plyr'\)""")
-                        match = regex.find(serverScripts)
+                    processPageStream(serverUrl, serverName, serverDoc, callback, processedUrls)?.let {
+                        foundAnyLink = true
                     }
                     
-                    if (match != null) {
-                        val base64String = match.groupValues[1]
-                        val decodedUrl = decodeBase64(base64String)
-                        
-                        if (decodedUrl.isNotBlank()) {
-                            val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
-                            
-                            // Assign quality based on server name
-                            val quality = when {
-                                serverName.contains("4k", ignoreCase = true) -> Qualities.P2160.value
-                                serverName.contains("رئيسي", ignoreCase = true) -> Qualities.P1080.value
-                                serverName.contains("hd", ignoreCase = true) -> Qualities.P1080.value
-                                serverName.contains("جوال", ignoreCase = true) -> Qualities.P720.value
-                                serverName.contains("sd", ignoreCase = true) -> Qualities.P480.value
-                                serverName.contains("english", ignoreCase = true) -> Qualities.P1080.value
-                                serverName.contains("احتياطي", ignoreCase = true) -> Qualities.P720.value
-                                serverName.contains("مشغل", ignoreCase = true) -> {
-                                    when {
-                                        serverName.contains("hd", ignoreCase = true) -> Qualities.P1080.value
-                                        serverName.contains("sd", ignoreCase = true) -> Qualities.P480.value
-                                        else -> Qualities.P720.value
-                                    }
-                                }
-                                else -> Qualities.Unknown.value
-                            }
-                            
-                            callback.invoke(
-                                newExtractorLink(
-                                    name,
-                                    "$name - $serverName",
-                                    streamUrl,
-                                    ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = serverUrl
-                                    this.quality = quality
-                                }
-                            )
-                            foundAnyLink = true
-                        }
-                    }
                 } catch (e: Exception) {
                     // Continue to next server
                 }
@@ -322,7 +281,7 @@ class KooraLite : MainAPI() {
             // STEP 5: Look for YouTube embeds
             // =====================================
             val youtubeIframes = mainDoc.select("iframe[src*='youtube.com'], iframe[src*='youtu.be']")
-            youtubeIframes.forEach { iframe ->
+            for (iframe in youtubeIframes) {
                 val youtubeSrc = iframe.attr("src")
                 if (youtubeSrc.isNotBlank()) {
                     // Extract YouTube video ID
@@ -348,14 +307,14 @@ class KooraLite : MainAPI() {
             }
             
             // =====================================
-            // STEP 6: Look for embedded iframes from other sites
+            // STEP 6: Look for iframe embeds
             // =====================================
             val otherIframes = mainDoc.select("iframe:not([src*='youtube.com']):not([src*='youtu.be'])")
             for (iframe in otherIframes) {
                 val iframeSrc = iframe.attr("src")
-                if (iframeSrc.isNotBlank() && !iframeSrc.contains("albaplayer")) {
+                if (iframeSrc.isNotBlank()) {
                     try {
-                        val fullUrl = if (!iframeSrc.startsWith("http")) {
+                        val fullIframeUrl = if (!iframeSrc.startsWith("http")) {
                             if (iframeSrc.startsWith("/")) {
                                 "$baseDomain$iframeSrc"
                             } else {
@@ -365,116 +324,13 @@ class KooraLite : MainAPI() {
                             iframeSrc
                         }
                         
-                        // Check if this iframe contains a stream
-                        val iframeDoc = app.get(fullUrl).document
-                        
-                        // Look for video elements
-                        val videoElements = iframeDoc.select("video source[src*='.m3u8'], video source[type='application/x-mpegURL']")
-                        for (source in videoElements) {
-                            val streamUrl = source.attr("src")
-                            if (streamUrl.isNotBlank()) {
-                                callback.invoke(
-                                    newExtractorLink(
-                                        name,
-                                        "$name - Embedded Stream",
-                                        streamUrl,
-                                        ExtractorLinkType.M3U8
-                                    ) {
-                                        this.referer = fullUrl
-                                        this.quality = Qualities.P720.value
-                                    }
-                                )
-                                foundAnyLink = true
-                            }
-                        }
-                        
-                        // Also check for direct m3u8 links in scripts
-                        val scripts = iframeDoc.select("script").html()
-                        val m3u8Regex = Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""")
-                        val m3u8Matches = m3u8Regex.findAll(scripts)
-                        
-                        for (match in m3u8Matches) {
-                            val streamUrl = match.groupValues[1]
-                            callback.invoke(
-                                newExtractorLink(
-                                    name,
-                                    "$name - Embedded Stream",
-                                    streamUrl,
-                                    ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = fullUrl
-                                    this.quality = Qualities.P720.value
-                                }
-                            )
-                            foundAnyLink = true
+                        // Recursively process iframe content
+                        if (fullIframeUrl.contains("albaplayer")) {
+                            foundAnyLink = extractAllContent(fullIframeUrl, callback) || foundAnyLink
                         }
                     } catch (e: Exception) {
                         // Continue to next iframe
                     }
-                }
-            }
-            
-            // =====================================
-            // STEP 7: Also get the stream from MAIN page as fallback
-            // =====================================
-            if (!foundAnyLink) {
-                val mainScripts = mainDoc.select("script").html()
-                
-                // Try to find AlbaPlayerControl with hls
-                var regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
-                var match = regex.find(mainScripts)
-                
-                // If not found, try with plyr
-                if (match == null) {
-                    regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','plyr'\)""")
-                    match = regex.find(mainScripts)
-                }
-                
-                if (match != null) {
-                    val base64String = match.groupValues[1]
-                    val decodedUrl = decodeBase64(base64String)
-                    
-                    if (decodedUrl.isNotBlank()) {
-                        val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
-                        
-                        callback.invoke(
-                            newExtractorLink(
-                                name,
-                                "$name - بث رئيسي",
-                                streamUrl,
-                                ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = url
-                                this.quality = Qualities.P1080.value
-                            }
-                        )
-                        foundAnyLink = true
-                    }
-                }
-            }
-            
-            // =====================================
-            // STEP 8: Look for direct m3u8 links in the main page
-            // =====================================
-            val directM3u8Regex = Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""")
-            val allText = mainDoc.html()
-            val m3u8Matches = directM3u8Regex.findAll(allText)
-            
-            for (match in m3u8Matches) {
-                val streamUrl = match.groupValues[1]
-                if (streamUrl.contains("m3u8") && !foundAnyLink) {
-                    callback.invoke(
-                        newExtractorLink(
-                            name,
-                            "$name - Direct Stream",
-                            streamUrl,
-                            ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = url
-                            this.quality = Qualities.P720.value
-                        }
-                    )
-                    foundAnyLink = true
                 }
             }
             
@@ -483,6 +339,110 @@ class KooraLite : MainAPI() {
         }
         
         return foundAnyLink
+    }
+    
+    private fun processPageStream(
+        pageUrl: String,
+        serverName: String,
+        doc: org.jsoup.nodes.Document,
+        callback: (ExtractorLink) -> Unit,
+        processedUrls: MutableSet<String>
+    ): Boolean {
+        var foundLink = false
+        
+        try {
+            // Look for AlbaPlayerControl in scripts
+            val scripts = doc.select("script").html()
+            
+            // Try to find AlbaPlayerControl with different patterns
+            val regexPatterns = listOf(
+                Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)"""),
+                Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','plyr'\)"""),
+                Regex("""AlbaPlayerControl\("([A-Za-z0-9+/=]+)","hls"\)"""),
+                Regex("""AlbaPlayerControl\("([A-Za-z0-9+/=]+)","plyr"\)""")
+            )
+            
+            var base64String: String? = null
+            for (pattern in regexPatterns) {
+                val match = pattern.find(scripts)
+                if (match != null) {
+                    base64String = match.groupValues[1]
+                    break
+                }
+            }
+            
+            if (base64String != null) {
+                val decodedUrl = decodeBase64(base64String)
+                if (decodedUrl.isNotBlank() && !processedUrls.contains(decodedUrl)) {
+                    processedUrls.add(decodedUrl)
+                    
+                    val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
+                    
+                    // Assign quality based on server name
+                    val quality = when {
+                        serverName.contains("4k", ignoreCase = true) -> Qualities.P2160.value
+                        serverName.contains("hd", ignoreCase = true) -> Qualities.P1080.value
+                        serverName.contains("رئيسي", ignoreCase = true) -> Qualities.P1080.value
+                        serverName.contains("sd", ignoreCase = true) -> Qualities.P480.value
+                        serverName.contains("جوال", ignoreCase = true) -> Qualities.P720.value
+                        serverName.contains("english", ignoreCase = true) -> Qualities.P1080.value
+                        serverName.contains("احتياطي", ignoreCase = true) -> Qualities.P720.value
+                        serverName.contains("live", ignoreCase = true) -> Qualities.P720.value
+                        serverName.contains("مشغل", ignoreCase = true) -> {
+                            when {
+                                serverName.contains("hd", ignoreCase = true) -> Qualities.P1080.value
+                                serverName.contains("sd", ignoreCase = true) -> Qualities.P480.value
+                                else -> Qualities.P720.value
+                            }
+                        }
+                        else -> Qualities.Unknown.value
+                    }
+                    
+                    callback.invoke(
+                        newExtractorLink(
+                            name,
+                            "$name - $serverName",
+                            streamUrl,
+                            ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = pageUrl  // CRITICAL for AWS S3 access
+                            this.quality = quality
+                        }
+                    )
+                    foundLink = true
+                }
+            }
+            
+            // Also check for direct m3u8 links in the page
+            val directM3u8Regex = Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""")
+            val allText = doc.html()
+            val m3u8Matches = directM3u8Regex.findAll(allText)
+            
+            for (match in m3u8Matches) {
+                val streamUrl = match.groupValues[1]
+                if (streamUrl.contains("m3u8") && !processedUrls.contains(streamUrl)) {
+                    processedUrls.add(streamUrl)
+                    
+                    callback.invoke(
+                        newExtractorLink(
+                            name,
+                            "$name - $serverName (Direct)",
+                            streamUrl,
+                            ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = pageUrl
+                            this.quality = Qualities.P720.value
+                        }
+                    )
+                    foundLink = true
+                }
+            }
+            
+        } catch (e: Exception) {
+            // Do nothing
+        }
+        
+        return foundLink
     }
 
     private fun fixUrl(url: String): String {
