@@ -383,7 +383,7 @@ class Catsuka : MainAPI() {
                         ?.let { if (it.startsWith("http")) it else "https:$it" }
                     
                     if (iframeSrc != null) {
-                        // Check if it's Vimeo - IMPROVED DETECTION
+                        // Check if it's Vimeo
                         if (iframeSrc.contains("vimeo.com")) {
                             val vimeoPattern = Regex("""vimeo\.com/(?:video/)?(\d+)""")
                             val vimeoMatch = vimeoPattern.find(iframeSrc)
@@ -391,12 +391,6 @@ class Catsuka : MainAPI() {
                                 val videoId = vimeoMatch.groupValues[1]
                                 val vimeoUrl = "https://vimeo.com/$videoId"
                                 
-                                // Try CloudStream's built-in extractor first
-                                if (loadExtractor(vimeoUrl, subtitleCallback, callback)) {
-                                    return true
-                                }
-                                
-                                // If that doesn't work, try our custom extractor
                                 val extractor = VimeoExtractor()
                                 extractor.getUrl(vimeoUrl, data, subtitleCallback, callback)
                                 return true
@@ -417,7 +411,6 @@ class Catsuka : MainAPI() {
                             }
                         }
                         
-                        // Try loading the iframe source with extractor
                         if (loadExtractor(iframeSrc, subtitleCallback, callback)) {
                             return true
                         }
@@ -513,24 +506,18 @@ class Catsuka : MainAPI() {
                     }
                 }
                 
-                // Look for Vimeo/YouTube in scripts - IMPROVED VIMEO DETECTION
+                // Look for Vimeo/YouTube in scripts
                 val scripts = document.select("script")
                 for (script in scripts) {
                     val scriptText = script.html()
                     
-                    // Vimeo pattern - improved detection
+                    // Vimeo pattern
                     val vimeoPattern = Regex("""vimeo\.com/(?:video/)?(\d+)""")
                     val vimeoMatch = vimeoPattern.find(scriptText)
                     if (vimeoMatch != null) {
                         val videoId = vimeoMatch.groupValues[1]
                         val vimeoUrl = "https://vimeo.com/$videoId"
                         
-                        // Try CloudStream's built-in extractor first
-                        if (loadExtractor(vimeoUrl, subtitleCallback, callback)) {
-                            return true
-                        }
-                        
-                        // If that doesn't work, try our custom extractor
                         val extractor = VimeoExtractor()
                         extractor.getUrl(vimeoUrl, data, subtitleCallback, callback)
                         return true
@@ -547,26 +534,6 @@ class Catsuka : MainAPI() {
                             return true
                         }
                     }
-                }
-                
-                // NEW: Also check for Vimeo video IDs in the page URL or text
-                val pageText = document.text()
-                val vimeoPattern = Regex("""vimeo\.com/(?:video/)?(\d+)""")
-                val vimeoMatches = vimeoPattern.findAll(pageText)
-                
-                for (match in vimeoMatches) {
-                    val videoId = match.groupValues[1]
-                    val vimeoUrl = "https://vimeo.com/$videoId"
-                    
-                    // Try CloudStream's built-in extractor
-                    if (loadExtractor(vimeoUrl, subtitleCallback, callback)) {
-                        return true
-                    }
-                    
-                    // Try our custom extractor
-                    val extractor = VimeoExtractor()
-                    extractor.getUrl(vimeoUrl, data, subtitleCallback, callback)
-                    return true
                 }
                 
                 // Check for video links
