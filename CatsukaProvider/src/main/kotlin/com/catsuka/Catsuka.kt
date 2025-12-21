@@ -321,7 +321,7 @@ class Catsuka : MainAPI() {
         }
     }
 
-    @Suppress("DEPRECATION")
+    // KEEP THE ORIGINAL WORKING loadLinks FUNCTION
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -329,67 +329,214 @@ class Catsuka : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            val document = app.get(data).document
-            
-            // 1. Try Vimeo iframe first (most common)
-            val vimeoIframe = document.selectFirst("iframe[src*='player.vimeo.com']")
-            if (vimeoIframe != null) {
-                val iframeSrc = vimeoIframe.attr("src")
-                if (iframeSrc.isNotBlank()) {
-                    val videoId = iframeSrc.substringAfter("video/").substringBefore("?").substringBefore("#")
-                    if (videoId.isNotBlank()) {
-                        loadExtractor("https://vimeo.com/$videoId", subtitleCallback, callback)
-                        return true
+            if (data.startsWith("http")) {
+                val document = app.get(data).document
+                
+                // Look for iframe first (Vimeo, YouTube embeds)
+                val iframe = document.selectFirst("iframe[src]")
+                if (iframe != null) {
+                    val iframeSrc = iframe.attr("src").takeIf { it.isNotBlank() }
+                        ?.let { if (it.startsWith("http")) it else "https:$it" }
+                    
+                    if (iframeSrc != null) {
+                        // Check if it's Vimeo
+                        if (iframeSrc.contains("vimeo.com")) {
+                            val vimeoPattern = Regex("""vimeo\.com/(?:video/)?(\d+)""")
+                            val vimeoMatch = vimeoPattern.find(iframeSrc)
+                            if (vimeoMatch != null) {
+                                val videoId = vimeoMatch.groupValues[1]
+                                val vimeoUrl = "https://vimeo.com/$videoId"
+                                
+                                val extractor = VimeoExtractor()
+                                extractor.getUrl(vimeoUrl, data, subtitleCallback, callback)
+                                return true
+                            }
+                        }
+                        
+                        // Check if it's YouTube
+                        if (iframeSrc.contains("youtube.com") || iframeSrc.contains("youtu.be")) {
+                            val youtubePattern = Regex("""(?:youtube\.com/embed/|youtu\.be/|youtube\.com/watch\?v=)([A-Za-z0-9_-]{11})""")
+                            val youtubeMatch = youtubePattern.find(iframeSrc)
+                            if (youtubeMatch != null) {
+                                val videoId = youtubeMatch.groupValues[1]
+                                val youtubeUrl = "https://www.youtube.com/watch?v=$videoId"
+                                
+                                if (loadExtractor(youtubeUrl, subtitleCallback, callback)) {
+                                    return true
+                                }
+                            }
+                        }
+                        
+                        if (loadExtractor(iframeSrc, subtitleCallback, callback)) {
+                            return true
+                        }
                     }
                 }
-            }
-            
-            // 2. Try YouTube iframe
-            val youtubeIframe = document.selectFirst("iframe[src*='youtube.com'], iframe[src*='youtu.be']")
-            if (youtubeIframe != null) {
-                val youtubeSrc = youtubeIframe.attr("src")
-                if (youtubeSrc.isNotBlank()) {
-                    val youtubeId = when {
-                        youtubeSrc.contains("youtube.com/embed/") -> 
-                            youtubeSrc.substringAfter("youtube.com/embed/").substringBefore("?").substringBefore("#")
-                        youtubeSrc.contains("youtu.be/") -> 
-                            youtubeSrc.substringAfter("youtu.be/").substringBefore("?").substringBefore("#")
-                        else -> null
-                    }
+                
+                // Look for direct video element
+                val videoSources = document.select("video source[src]")
+                for (video in videoSources) {
+                    val videoSrc = video.attr("src").takeIf { it.isNotBlank() }
+                        ?.let { src ->
+                            when {
+                                src.startsWith("http") -> src
+                                src.startsWith("//") -> "https:$src"
+                                src.startsWith("/") -> "$mainUrl$src"
+                                else -> "$mainUrl/$src"
+                            }
+                        }
                     
-                    if (youtubeId != null) {
-                        loadExtractor("https://www.youtube.com/watch?v=$youtubeId", subtitleCallback, callback)
-                        return true
-                    }
-                }
-            }
-            
-            // 3. Try direct video source
-            val videoSource = document.selectFirst("video source[src], video[src]")
-            if (videoSource != null) {
-                val videoSrc = videoSource.attr("src")
-                if (videoSrc.isNotBlank()) {
-                    val fullUrl = when {
-                        videoSrc.startsWith("http") -> videoSrc
-                        videoSrc.startsWith("//") -> "https:$videoSrc"
-                        videoSrc.startsWith("/") -> "$mainUrl$videoSrc"
-                        else -> "$mainUrl/$videoSrc"
-                    }
-                    
-                    val quality = determineQualityFromUrl(fullUrl)
-                    val isM3u8 = videoSrc.contains(".m3u8")
-                    
-                    callback.invoke(
-                        ExtractorLink(
-                            name,
-                            "Direct Video",
-                            fullUrl,
-                            "$mainUrl/",
-                            quality,
-                            isM3u8
+                    if (videoSrc != null) {
+                        val quality = determineQualityFromUrl(videoSrc)
+                        val type = video.attr("type").takeIf { it.isNotBlank() }
+                        val format = when {
+                            type?.contains("mp4") == true -> "MP4"
+                            type?.contains("webm") == true -> "WebM"
+                            videoSrc.contains(".mp4") -> "MP4"
+                            videoSrc.contains(".webm") -> "WebM"
+                            else -> "Video"
+                        }
+                        
+                        val qualityName = when (quality) {
+                            Qualities.P2160.value -> "4K"
+                            Qualities.P1440.value -> "1440p"
+                            Qualities.P1080.value -> "1080p"
+                            Qualities.P720.value -> "720p"
+                            Qualities.P480.value -> "480p"
+                            Qualities.P360.value -> "360p"
+                            Qualities.P240.value -> "240p"
+                            else -> "Unknown"
+                        }
+                        
+                        callback.invoke(
+                            newExtractorLink(
+                                source = name,
+                                name = "$format - $qualityName",
+                                url = videoSrc
+                            ) {
+                                this.referer = mainUrl
+                                this.quality = quality
+                            }
                         )
-                    )
-                    return true
+                        return true
+                    }
+                }
+                
+                // Look for video tag with direct src
+                val videoTags = document.select("video[src]")
+                for (videoTag in videoTags) {
+                    val videoSrc = videoTag.attr("src").takeIf { it.isNotBlank() }
+                        ?.let { src ->
+                            when {
+                                src.startsWith("http") -> src
+                                src.startsWith("//") -> "https:$src"
+                                src.startsWith("/") -> "$mainUrl$src"
+                                else -> "$mainUrl/$src"
+                            }
+                        }
+                    
+                    if (videoSrc != null) {
+                        val quality = determineQualityFromUrl(videoSrc)
+                        val qualityName = when (quality) {
+                            Qualities.P2160.value -> "4K"
+                            Qualities.P1440.value -> "1440p"
+                            Qualities.P1080.value -> "1080p"
+                            Qualities.P720.value -> "720p"
+                            Qualities.P480.value -> "480p"
+                            Qualities.P360.value -> "360p"
+                            Qualities.P240.value -> "240p"
+                            else -> "Unknown"
+                        }
+                        
+                        callback.invoke(
+                            newExtractorLink(
+                                source = name,
+                                name = "Direct Video - $qualityName",
+                                url = videoSrc
+                            ) {
+                                this.referer = mainUrl
+                                this.quality = quality
+                            }
+                        )
+                        return true
+                    }
+                }
+                
+                // Look for Vimeo/YouTube in scripts
+                val scripts = document.select("script")
+                for (script in scripts) {
+                    val scriptText = script.html()
+                    
+                    // Vimeo pattern
+                    val vimeoPattern = Regex("""vimeo\.com/(?:video/)?(\d+)""")
+                    val vimeoMatch = vimeoPattern.find(scriptText)
+                    if (vimeoMatch != null) {
+                        val videoId = vimeoMatch.groupValues[1]
+                        val vimeoUrl = "https://vimeo.com/$videoId"
+                        
+                        val extractor = VimeoExtractor()
+                        extractor.getUrl(vimeoUrl, data, subtitleCallback, callback)
+                        return true
+                    }
+                    
+                    // YouTube pattern
+                    val youtubePattern = Regex("""youtube\.com/embed/([A-Za-z0-9_-]{11})""")
+                    val youtubeMatch = youtubePattern.find(scriptText)
+                    if (youtubeMatch != null) {
+                        val videoId = youtubeMatch.groupValues[1]
+                        val youtubeUrl = "https://www.youtube.com/watch?v=$videoId"
+                        
+                        if (loadExtractor(youtubeUrl, subtitleCallback, callback)) {
+                            return true
+                        }
+                    }
+                }
+                
+                // Check for video links
+                val videoLinks = document.select("a[href*='.mp4'], a[href*='.webm'], a[href*='.m3u8']")
+                for (link in videoLinks) {
+                    val href = link.attr("href").takeIf { it.isNotBlank() }
+                    if (href != null && (href.contains(".mp4") || href.contains(".webm") || href.contains(".m3u8"))) {
+                        val videoSrc = when {
+                            href.startsWith("http") -> href
+                            href.startsWith("//") -> "https:$href"
+                            href.startsWith("/") -> "$mainUrl$href"
+                            else -> "$mainUrl/$href"
+                        }
+                        
+                        val quality = determineQualityFromUrl(videoSrc)
+                        val qualityName = when (quality) {
+                            Qualities.P2160.value -> "4K"
+                            Qualities.P1440.value -> "1440p"
+                            Qualities.P1080.value -> "1080p"
+                            Qualities.P720.value -> "720p"
+                            Qualities.P480.value -> "480p"
+                            Qualities.P360.value -> "360p"
+                            Qualities.P240.value -> "240p"
+                            else -> "Unknown"
+                        }
+                        
+                        if (videoSrc.contains(".m3u8")) {
+                            M3u8Helper.generateM3u8(
+                                source = name,
+                                streamUrl = videoSrc,
+                                referer = mainUrl,
+                                quality = quality
+                            ).forEach(callback)
+                        } else {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = name,
+                                    name = "Direct Video - $qualityName",
+                                    url = videoSrc
+                                ) {
+                                    this.referer = mainUrl
+                                    this.quality = quality
+                                }
+                            )
+                        }
+                        return true
+                    }
                 }
             }
             
