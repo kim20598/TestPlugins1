@@ -91,14 +91,13 @@ class VimeoExtractor : ExtractorApi() {
                         files.dash?.cdns?.forEach { (cdnName, cdn) ->
                             cdn.url?.let { dashUrl ->
                                 callback.invoke(
-                                    newExtractorLink(
+                                    ExtractorLink(
+                                        name = name,
                                         source = name,
-                                        name = "Vimeo DASH",
-                                        url = dashUrl
-                                    ) {
-                                        this.referer = "https://vimeo.com/"
-                                        this.quality = Qualities.P1080.value
-                                    }
+                                        url = dashUrl,
+                                        referer = "https://vimeo.com/",
+                                        quality = Qualities.P1080.value
+                                    )
                                 )
                                 return true
                             }
@@ -109,14 +108,13 @@ class VimeoExtractor : ExtractorApi() {
                             video.url?.let { videoUrl ->
                                 val quality = video.quality ?: "unknown"
                                 callback.invoke(
-                                    newExtractorLink(
+                                    ExtractorLink(
+                                        name = name,
                                         source = name,
-                                        name = "Vimeo $quality",
-                                        url = videoUrl
-                                    ) {
-                                        this.referer = "https://vimeo.com/"
-                                        this.quality = getQuality(quality)
-                                    }
+                                        url = videoUrl,
+                                        referer = "https://vimeo.com/",
+                                        quality = getQuality(quality)
+                                    )
                                 )
                                 return true
                             }
@@ -141,14 +139,13 @@ class VimeoExtractor : ExtractorApi() {
                         return true
                     } else if (videoUrl.contains(".mp4")) {
                         callback.invoke(
-                            newExtractorLink(
+                            ExtractorLink(
+                                name = name,
                                 source = name,
-                                name = "Vimeo Video",
-                                url = videoUrl
-                            ) {
-                                this.referer = "https://vimeo.com/"
-                                this.quality = Qualities.P1080.value
-                            }
+                                url = videoUrl,
+                                referer = "https://vimeo.com/",
+                                quality = Qualities.P1080.value
+                            )
                         )
                         return true
                     }
@@ -192,14 +189,13 @@ class VimeoExtractor : ExtractorApi() {
                         video.url?.let { videoUrl ->
                             val quality = video.quality ?: "unknown"
                             callback.invoke(
-                                newExtractorLink(
+                                ExtractorLink(
+                                    name = name,
                                     source = name,
-                                    name = "Vimeo $quality",
-                                    url = videoUrl
-                                ) {
-                                    this.referer = "https://vimeo.com/"
-                                    this.quality = getQuality(quality)
-                                }
+                                    url = videoUrl,
+                                    referer = "https://vimeo.com/",
+                                    quality = getQuality(quality)
+                                )
                             )
                             return true
                         }
@@ -262,13 +258,12 @@ class VimeoExtractor : ExtractorApi() {
     // Method 4: Fallback to embed
     private fun fallbackToEmbed(videoId: String, callback: (ExtractorLink) -> Unit): Boolean {
         callback.invoke(
-            newExtractorLink(
+            ExtractorLink(
+                name = name,
                 source = name,
-                name = "Vimeo Embed",
-                url = "https://player.vimeo.com/video/$videoId"
-            ) {
-                this.referer = "https://vimeo.com/"
-            }
+                url = "https://player.vimeo.com/video/$videoId",
+                referer = "https://vimeo.com/"
+            )
         )
         return true
     }
