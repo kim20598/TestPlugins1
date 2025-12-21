@@ -4,7 +4,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import org.jsoup.Jsoup
 
 class VimeoExtractor : ExtractorApi() {
     override val name = "CatsukaVimeo"
@@ -418,10 +417,11 @@ class VimeoExtractor : ExtractorApi() {
                     if (response.isSuccessful) {
                         val text = response.text
                         if (text.contains("url") && (text.contains(".mp4") || text.contains(".m3u8"))) {
-                            // Try to parse as JSON
+                            // Try to parse as JSON and search for video URLs
                             val json = tryParseJson<Map<String, Any>>(text)
-                            findVideoUrlsInJson(json, callback)
-                            return true
+                            if (findVideoUrlsInJson(json, callback)) {
+                                return true
+                            }
                         }
                     }
                 }
@@ -432,11 +432,12 @@ class VimeoExtractor : ExtractorApi() {
         }
     }
     
-    private fun findVideoUrlsInJson(json: Map<String, Any>?, callback: (ExtractorLink) -> Unit): Boolean {
+    // FIXED: This function is now suspend so it can call suspend functions
+    private suspend fun findVideoUrlsInJson(json: Map<String, Any>?, callback: (ExtractorLink) -> Unit): Boolean {
         if (json == null) return false
         
         // Recursively search for video URLs in JSON
-        fun search(obj: Any?): Boolean {
+        suspend fun search(obj: Any?): Boolean {
             return when (obj) {
                 is String -> {
                     if (obj.contains(".m3u8")) {
@@ -465,7 +466,13 @@ class VimeoExtractor : ExtractorApi() {
                     }
                 }
                 is Map<*, *> -> {
-                    obj.entries.any { (_, value) -> search(value) }
+                    var found = false
+                    for ((_, value) in obj) {
+                        if (search(value)) {
+                            found = true
+                        }
+                    }
+                    found
                 }
                 is List<*> -> {
                     obj.any { search(it) }
