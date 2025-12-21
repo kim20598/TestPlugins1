@@ -18,20 +18,19 @@ class VimeoExtractor : ExtractorApi() {
     ) {
         val videoId = url.substringAfterLast("/").substringBefore("?")
         
-        // Create a list of suspend functions to try
+        // Try methods sequentially with proper error handling
         val methods: List<suspend () -> Boolean> = listOf(
             { extractFromPlayerPage(videoId, referer, callback) },
             { extractFromConfigApi(videoId, referer, callback) },
             { extractFromOEmbed(videoId, referer, callback) }
         )
         
-        // Try each method sequentially within the coroutine scope
         for (method in methods) {
             val success = runCatching { method() }.getOrElse { false }
             if (success) return
         }
         
-        // If all suspend methods fail, use the non-suspend fallback
+        // Fallback to embed
         fallbackToEmbed(videoId, callback)
     }
     
@@ -41,16 +40,7 @@ class VimeoExtractor : ExtractorApi() {
             val playerUrl = "https://player.vimeo.com/video/$videoId"
             val response = app.get(playerUrl, headers = mapOf(
                 "Referer" to (referer ?: "https://www.catsuka.com/"),
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language" to "en-US,en;q=0.5",
-                "Accept-Encoding" to "gzip, deflate, br",
-                "DNT" to "1",
-                "Connection" to "keep-alive",
-                "Upgrade-Insecure-Requests" to "1",
-                "Sec-Fetch-Dest" to "document",
-                "Sec-Fetch-Mode" to "navigate",
-                "Sec-Fetch-Site" to "cross-site"
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             ))
             
             if (response.isSuccessful) {
@@ -74,8 +64,7 @@ class VimeoExtractor : ExtractorApi() {
                                     referer = "https://vimeo.com/",
                                     headers = mapOf(
                                         "Referer" to "https://vimeo.com/",
-                                        "Origin" to "https://player.vimeo.com",
-                                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                                        "Origin" to "https://player.vimeo.com"
                                     )
                                 ).forEach(callback)
                                 return true
@@ -85,58 +74,17 @@ class VimeoExtractor : ExtractorApi() {
                         // Extract DASH URLs
                         files.dash?.cdns?.forEach { (cdnName, cdn) ->
                             cdn.url?.let { dashUrl ->
-                                newExtractorLink {
-                                    this.name = this@VimeoExtractor.name
-                                    this.source = this@VimeoExtractor.name
-                                    this.url = dashUrl
+                                newExtractorLink(
+                                    source = name,
+                                    name = "Vimeo DASH",
+                                    url = dashUrl
+                                ) {
                                     this.referer = "https://vimeo.com/"
                                     this.quality = Qualities.P1080.value
                                 }?.let { callback(it) }
                                 return true
                             }
                         }
-                        
-                        // Extract progressive videos
-                        files.progressive?.forEach { video ->
-                            video.url?.let { videoUrl ->
-                                val quality = video.quality ?: "unknown"
-                                newExtractorLink {
-                                    this.name = this@VimeoExtractor.name
-                                    this.source = this@VimeoExtractor.name
-                                    this.url = videoUrl
-                                    this.referer = "https://vimeo.com/"
-                                    this.quality = getQuality(quality)
-                                }?.let { callback(it) }
-                                return true
-                            }
-                        }
-                    }
-                }
-                
-                // Try alternative pattern for JSON
-                val altRegex = Regex(""""url":"(https://[^"]+\\.(?:m3u8|mp4)[^"]*)"""")
-                val altMatches = altRegex.findAll(html)
-                
-                for (match in altMatches) {
-                    var videoUrl = match.groupValues[1]
-                    videoUrl = videoUrl.replace("\\/", "/")
-                    
-                    if (videoUrl.contains(".m3u8")) {
-                        M3u8Helper.generateM3u8(
-                            source = name,
-                            streamUrl = videoUrl,
-                            referer = "https://vimeo.com/"
-                        ).forEach(callback)
-                        return true
-                    } else if (videoUrl.contains(".mp4")) {
-                        newExtractorLink {
-                            this.name = this@VimeoExtractor.name
-                            this.source = this@VimeoExtractor.name
-                            this.url = videoUrl
-                            this.referer = "https://vimeo.com/"
-                            this.quality = Qualities.P1080.value
-                        }?.let { callback(it) }
-                        return true
                     }
                 }
             }
@@ -154,14 +102,7 @@ class VimeoExtractor : ExtractorApi() {
                     "Referer" to (referer ?: "https://www.catsuka.com/"),
                     "Origin" to "https://player.vimeo.com",
                     "Accept" to "application/json",
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept-Language" to "en-US,en;q=0.5",
-                    "Accept-Encoding" to "gzip, deflate, br",
-                    "DNT" to "1",
-                    "Connection" to "keep-alive",
-                    "Sec-Fetch-Dest" to "empty",
-                    "Sec-Fetch-Mode" to "cors",
-                    "Sec-Fetch-Site" to "same-site"
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
                 )
             )
             
@@ -174,10 +115,11 @@ class VimeoExtractor : ExtractorApi() {
                     files.progressive?.forEach { video ->
                         video.url?.let { videoUrl ->
                             val quality = video.quality ?: "unknown"
-                            newExtractorLink {
-                                this.name = this@VimeoExtractor.name
-                                this.source = this@VimeoExtractor.name
-                                this.url = videoUrl
+                            newExtractorLink(
+                                source = name,
+                                name = "Vimeo $quality",
+                                url = videoUrl
+                            ) {
                                 this.referer = "https://vimeo.com/"
                                 this.quality = getQuality(quality)
                             }?.let { callback(it) }
@@ -235,6 +177,7 @@ class VimeoExtractor : ExtractorApi() {
     
     // Method 4: Fallback to embed
     private fun fallbackToEmbed(videoId: String, callback: (ExtractorLink) -> Unit): Boolean {
+        // Use the regular constructor here since this is not a suspend context
         callback.invoke(
             ExtractorLink(
                 name = name,
@@ -270,8 +213,7 @@ class VimeoExtractor : ExtractorApi() {
 
     data class VimeoPlayerFiles(
         @JsonProperty("dash") val dash: VimeoDash? = null,
-        @JsonProperty("hls") val hls: VimeoHls? = null,
-        @JsonProperty("progressive") val progressive: List<ProgressiveVideo>? = null
+        @JsonProperty("hls") val hls: VimeoHls? = null
     )
 
     data class VimeoDash(
