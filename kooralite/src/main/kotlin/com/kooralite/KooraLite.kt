@@ -214,9 +214,9 @@ class KooraLite : MainAPI() {
                     // Fix the URL if needed
                     if (!serverHref.startsWith("http")) {
                         serverHref = if (serverHref.startsWith("/")) {
-                            "https://b.sia.watch$serverHref"
+                            "https://c.sia.watch$serverHref"
                         } else {
-                            "https://b.sia.watch/$serverHref"
+                            "https://c.sia.watch/$serverHref"
                         }
                     }
                     servers.add(Pair(serverName, serverHref))
