@@ -314,7 +314,7 @@ class KooraLite : MainAPI() {
                         }
                     }
                 } catch (e: Exception) {
-                    continue
+                    // Continue to next server
                 }
             }
             
@@ -351,7 +351,7 @@ class KooraLite : MainAPI() {
             // STEP 6: Look for embedded iframes from other sites
             // =====================================
             val otherIframes = mainDoc.select("iframe:not([src*='youtube.com']):not([src*='youtu.be'])")
-            otherIframes.forEach { iframe ->
+            for (iframe in otherIframes) {
                 val iframeSrc = iframe.attr("src")
                 if (iframeSrc.isNotBlank() && !iframeSrc.contains("albaplayer")) {
                     try {
@@ -370,7 +370,7 @@ class KooraLite : MainAPI() {
                         
                         // Look for video elements
                         val videoElements = iframeDoc.select("video source[src*='.m3u8'], video source[type='application/x-mpegURL']")
-                        videoElements.forEach { source ->
+                        for (source in videoElements) {
                             val streamUrl = source.attr("src")
                             if (streamUrl.isNotBlank()) {
                                 callback.invoke(
@@ -393,7 +393,7 @@ class KooraLite : MainAPI() {
                         val m3u8Regex = Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""")
                         val m3u8Matches = m3u8Regex.findAll(scripts)
                         
-                        m3u8Matches.forEach { match ->
+                        for (match in m3u8Matches) {
                             val streamUrl = match.groupValues[1]
                             callback.invoke(
                                 newExtractorLink(
@@ -409,7 +409,7 @@ class KooraLite : MainAPI() {
                             foundAnyLink = true
                         }
                     } catch (e: Exception) {
-                        continue
+                        // Continue to next iframe
                     }
                 }
             }
@@ -460,7 +460,7 @@ class KooraLite : MainAPI() {
             val allText = mainDoc.html()
             val m3u8Matches = directM3u8Regex.findAll(allText)
             
-            m3u8Matches.forEach { match ->
+            for (match in m3u8Matches) {
                 val streamUrl = match.groupValues[1]
                 if (streamUrl.contains("m3u8") && !foundAnyLink) {
                     callback.invoke(
