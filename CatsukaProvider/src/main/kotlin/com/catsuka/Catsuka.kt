@@ -321,7 +321,7 @@ class Catsuka : MainAPI() {
         }
     }
 
-    // SIMPLIFIED loadLinks function
+    // FIXED loadLinks function - Using lambda configuration correctly
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -383,10 +383,11 @@ class Catsuka : MainAPI() {
                         newExtractorLink(
                             source = name,
                             name = "Direct Video",
-                            url = fullUrl,
-                            quality = quality,
-                            isM3u8 = isM3u8
-                        )
+                            url = fullUrl
+                        ) {
+                            this.quality = quality
+                            this.isM3u8 = isM3u8
+                        }
                     )
                     return true
                 }
