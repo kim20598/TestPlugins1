@@ -341,7 +341,7 @@ class KooraLite : MainAPI() {
         return foundAnyLink
     }
     
-    private fun processPageStream(
+    private suspend fun processPageStream(  // Changed to suspend function
         pageUrl: String,
         serverName: String,
         doc: org.jsoup.nodes.Document,
@@ -398,17 +398,18 @@ class KooraLite : MainAPI() {
                         else -> Qualities.Unknown.value
                     }
                     
-                    callback.invoke(
-                        newExtractorLink(
-                            name,
-                            "$name - $serverName",
-                            streamUrl,
-                            ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = pageUrl  // CRITICAL for AWS S3 access
-                            this.quality = quality
-                        }
-                    )
+                    // Now this is called from a suspend function, so it's valid
+                    val extractorLink = newExtractorLink(
+                        name,
+                        "$name - $serverName",
+                        streamUrl,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = pageUrl  // CRITICAL for AWS S3 access
+                        this.quality = quality
+                    }
+                    
+                    callback.invoke(extractorLink)
                     foundLink = true
                 }
             }
@@ -423,17 +424,18 @@ class KooraLite : MainAPI() {
                 if (streamUrl.contains("m3u8") && !processedUrls.contains(streamUrl)) {
                     processedUrls.add(streamUrl)
                     
-                    callback.invoke(
-                        newExtractorLink(
-                            name,
-                            "$name - $serverName (Direct)",
-                            streamUrl,
-                            ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = pageUrl
-                            this.quality = Qualities.P720.value
-                        }
-                    )
+                    // Now this is called from a suspend function, so it's valid
+                    val extractorLink = newExtractorLink(
+                        name,
+                        "$name - $serverName (Direct)",
+                        streamUrl,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = pageUrl
+                        this.quality = Qualities.P720.value
+                    }
+                    
+                    callback.invoke(extractorLink)
                     foundLink = true
                 }
             }
