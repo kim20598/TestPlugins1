@@ -40,7 +40,6 @@ class BeinLive : MainAPI() {
             val href = fixUrl(link)
             
             val title = selectFirst(".gr-title, .gr-info h3")?.text()?.trim() ?: return null
-            val teams = extractTeamsFromTitle(title)
             
             val thumbnail = selectFirst(".TmFlag")?.attr("data-src") ?: ""
             val poster = if (thumbnail.isNotBlank()) fixUrl(thumbnail) else customPosterUrl
@@ -281,14 +280,16 @@ class BeinLive : MainAPI() {
                 val streamUrl = match.value
                 if (streamUrl.contains("m3u8") && visited.add(streamUrl)) {
                     callback(
-                        ExtractorLink(
+                        newExtractorLink(
                             name,
                             "M3U8 Stream",
                             streamUrl,
                             url,
                             Qualities.Unknown.value,
-                            isM3u8 = true
-                        )
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = url
+                        }
                     )
                     found = true
                 }
@@ -302,14 +303,16 @@ class BeinLive : MainAPI() {
                     if (decoded.contains(".m3u8") && decoded.startsWith("http")) {
                         if (visited.add(decoded)) {
                             callback(
-                                ExtractorLink(
+                                newExtractorLink(
                                     name,
                                     "Base64 Stream",
                                     decoded,
                                     url,
                                     Qualities.Unknown.value,
-                                    isM3u8 = true
-                                )
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = url
+                                }
                             )
                             found = true
                         }
@@ -330,14 +333,16 @@ class BeinLive : MainAPI() {
                     val streamUrl = match.groupValues[1]
                     if (streamUrl.contains("m3u8") && visited.add(streamUrl)) {
                         callback(
-                            ExtractorLink(
+                            newExtractorLink(
                                 name,
                                 "Player Stream",
                                 streamUrl,
                                 url,
                                 Qualities.Unknown.value,
-                                isM3u8 = true
-                            )
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = url
+                            }
                         )
                         found = true
                     }
@@ -369,14 +374,16 @@ class BeinLive : MainAPI() {
             val streamUrl = match.value
             if (streamUrl.contains("m3u8")) {
                 callback(
-                    ExtractorLink(
+                    newExtractorLink(
                         name,
                         "Clappr Player",
                         streamUrl,
                         url,
                         Qualities.Unknown.value,
-                        isM3u8 = true
-                    )
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = url
+                    }
                 )
                 found = true
             }
@@ -389,14 +396,16 @@ class BeinLive : MainAPI() {
             if (src.contains("m3u8") || src.contains("mp4")) {
                 val fullUrl = if (src.startsWith("http")) src else "https:$src"
                 callback(
-                    ExtractorLink(
+                    newExtractorLink(
                         name,
                         "Video Source",
                         fullUrl,
                         url,
                         Qualities.Unknown.value,
-                        isM3u8 = src.contains("m3u8")
-                    )
+                        type = if (src.contains("m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = url
+                    }
                 )
                 found = true
             }
