@@ -15,7 +15,7 @@ cloudstream {
      * */
     status = 1
     tvTypes = listOf(
-        "Live"
+        "Movie"
     )
 
     description = "مشاهدة مباريات كرة القدم بث مباشر - Live Football Matches"
@@ -23,4 +23,5 @@ cloudstream {
 
     isCrossPlatform = true
 }
+
 
