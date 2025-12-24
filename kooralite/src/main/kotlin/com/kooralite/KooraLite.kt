@@ -13,7 +13,6 @@ class KooraLite : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie)
     
-    // Custom poster image for all matches
     private val customPosterUrl = "https://raw.githubusercontent.com/kim20598/TestPlugins1/master/kooralite/images.png"
 
     private fun decodeBase64(encoded: String): String {
@@ -37,15 +36,8 @@ class KooraLite : MainAPI() {
         val time = selectFirst(".MT_Time")?.text()?.trim() ?: ""
         val tournament = selectFirst(".MT_Info li:last-child span")?.text()?.trim() ?: ""
         
-        val team1LogoRaw = selectFirst(".MT_Team.TM1 .TM_Logo img")?.attr("src")
-        val team2LogoRaw = selectFirst(".MT_Team.TM2 .TM_Logo img")?.attr("src")
-        val team1Logo = team1LogoRaw?.let { if (it.startsWith("http")) it else fixUrl(it) }
-        val team2Logo = team2LogoRaw?.let { if (it.startsWith("http")) it else fixUrl(it) }
-        
-        // Always use custom poster instead of team logos
         val poster = customPosterUrl
 
-        // Get status
         val statusClass = classNames().firstOrNull { it in listOf("live", "finished", "coming-soon") } ?: ""
         val statusText = when (statusClass) {
             "live" -> "🔴 مباشر"
@@ -68,8 +60,7 @@ class KooraLite : MainAPI() {
             "$statusText $title"
         }
 
-        // Store match data
-        val matchData = listOf(title, time, tournament, statusClass, poster, team1, team2, team1Logo ?: "", team2Logo ?: "")
+        val matchData = listOf(title, time, tournament, statusClass, poster, team1, team2, "", "")
             .joinToString("|")
         val dataUrl = "$href|$matchData"
 
@@ -94,7 +85,6 @@ class KooraLite : MainAPI() {
 
         val items = mutableListOf<SearchResponse>()
 
-        // Get matches
         document.select(".AY_Match").forEach { match ->
             match.toMatchSearchResponse()?.let { items.add(it) }
         }
@@ -129,13 +119,10 @@ class KooraLite : MainAPI() {
         val time = parts.getOrNull(2) ?: ""
         val tournament = parts.getOrNull(3) ?: ""
         val status = parts.getOrNull(4) ?: ""
-        val poster = customPosterUrl // Always use custom poster
+        val poster = customPosterUrl
         val team1 = parts.getOrNull(6) ?: ""
         val team2 = parts.getOrNull(7) ?: ""
 
-        val document = app.get(actualUrl).document
-
-        // Build simple description
         val description = buildString {
             if (team1.isNotBlank() && team2.isNotBlank()) {
                 append("⚽ $team1 vs $team2\n")
@@ -168,12 +155,10 @@ class KooraLite : MainAPI() {
         try {
             val dataUrl = fixUrl(data)
             
-            // 1. If it's already an albaplayer URL, extract all servers
             if (dataUrl.contains("albaplayer")) {
                 return extractAllAlbaPlayerServers(dataUrl, callback)
             }
             
-            // 2. Otherwise, find albaplayer iframes
             val doc = app.get(dataUrl).document
             var foundLinks = false
             
@@ -197,119 +182,129 @@ class KooraLite : MainAPI() {
         
         try {
             // =====================================
-            // STEP 1: Get MAIN albaplayer page
+            // STEP 1: Get MAIN albaplayer page WITH JAVASCRIPT SUPPORT
             // =====================================
-            val mainDoc = app.get(url).document
+            val response = app.get(url)
+            val html = response.text
+            
+            if (html.isBlank()) return false
             
             // =====================================
-            // STEP 2: Extract the base domain from the current URL
+            // STEP 2: Extract the base URL dynamically from the HTML
             // =====================================
             val baseDomain = try {
                 val uri = URI(url)
                 "${uri.scheme}://${uri.host}"
             } catch (e: Exception) {
-                // Fallback: try to extract domain from URL
+                // Try to extract from the HTML itself
                 val domainRegex = Regex("""(https?://[^/]+)""")
-                domainRegex.find(url)?.groupValues?.get(1) ?: "https://b.sia.watch"
+                val match = domainRegex.find(html)
+                match?.groupValues?.get(1) ?: "https://b.sia.watch"
             }
             
             // =====================================
-            // STEP 3: Extract ALL server links from the menu
+            // STEP 3: Extract ALL server data from the HTML
             // =====================================
-            val serverLinks = mainDoc.select(".aplr-menu a.aplr-link")
+            // First try: Look for server menu in HTML
+            val serverMenuRegex = Regex("""<div[^>]*class\s*=\s*["'][^"']*aplr-menu[^"']*["'][^>]*>(.*?)</div>""", RegexOption.DOT_MODE)
+            val serverMenuMatch = serverMenuRegex.find(html)
+            
             val servers = mutableListOf<Pair<String, String>>()
             
-            serverLinks.forEach { link ->
-                val serverName = link.text().trim()
-                var serverHref = link.attr("href")
+            if (serverMenuMatch != null) {
+                val menuContent = serverMenuMatch.groupValues[1]
+                // Extract server links from menu
+                val linkRegex = Regex("""<a[^>]*class\s*=\s*["'][^"']*aplr-link[^"']*["'][^>]*href\s*=\s*["']([^"']+)["'][^>]*>([^<]+)</a>""")
+                val linkMatches = linkRegex.findAll(menuContent)
                 
-                if (serverName.isNotBlank() && serverHref.isNotBlank()) {
-                    // Fix the URL if needed
-                    if (!serverHref.startsWith("http")) {
-                        serverHref = if (serverHref.startsWith("/")) {
-                            "$baseDomain$serverHref"
+                linkMatches.forEach { match ->
+                    val serverHref = match.groupValues[1].trim()
+                    val serverName = match.groupValues[2].trim()
+                    
+                    if (serverName.isNotBlank() && serverHref.isNotBlank()) {
+                        val fullUrl = if (!serverHref.startsWith("http")) {
+                            if (serverHref.startsWith("/")) {
+                                "$baseDomain$serverHref"
+                            } else {
+                                "$baseDomain/$serverHref"
+                            }
                         } else {
-                            "$baseDomain/$serverHref"
+                            serverHref
                         }
+                        servers.add(Pair(serverName, fullUrl))
                     }
-                    servers.add(Pair(serverName, serverHref))
+                }
+            }
+            
+            // Fallback: Try to extract servers from any script
+            if (servers.isEmpty()) {
+                // Look for servers in JavaScript variables
+                val serverRegex = Regex("""['"]?server['"]?\s*:\s*['"]([^'"]+)['"]""")
+                val serverMatches = serverRegex.findAll(html)
+                
+                serverMatches.forEachIndexed { index, match ->
+                    val serverValue = match.groupValues[1]
+                    if (serverValue.isNotBlank()) {
+                        // Try to construct server URL
+                        val serverUrl = if (serverValue.contains("?")) {
+                            if (serverValue.startsWith("/")) {
+                                "$baseDomain$serverValue"
+                            } else if (!serverValue.startsWith("http")) {
+                                "$baseDomain/$serverValue"
+                            } else {
+                                serverValue
+                            }
+                        } else {
+                            // Add serv parameter
+                            "$url?serv=${index + 1}"
+                        }
+                        servers.add(Pair("Server ${index + 1}", serverUrl))
+                    }
+                }
+            }
+            
+            // If still no servers, try the default serv parameters
+            if (servers.isEmpty()) {
+                // Try common server patterns
+                for (i in 1..4) {
+                    servers.add(Pair("Server $i", "$url?serv=$i"))
                 }
             }
             
             // =====================================
-            // STEP 4: Process EACH server to get its stream
+            // STEP 4: Process EACH server page
             // =====================================
+            val processedUrls = mutableSetOf<String>()
+            
+            // Process the current page first (might be main stream)
+            processAlbaPlayerPage(url, "Main Stream", html, callback, processedUrls)?.let {
+                foundAnyLink = true
+            }
+            
+            // Process each server page
             for ((serverName, serverUrl) in servers) {
                 try {
-                    // Fetch THIS server's page
-                    val serverDoc = app.get(serverUrl).document
+                    val serverResponse = app.get(serverUrl)
+                    val serverHtml = serverResponse.text
                     
-                    // Look for AlbaPlayerControl in THIS server's scripts
-                    val serverScripts = serverDoc.select("script").html()
-                    val regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
-                    val match = regex.find(serverScripts)
-                    
-                    if (match != null) {
-                        val base64String = match.groupValues[1]
-                        val decodedUrl = decodeBase64(base64String)
-                        
-                        if (decodedUrl.isNotBlank()) {
-                            val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
-                            
-                            // Assign quality
-                            val quality = when {
-                                serverName.contains("رئيسي", ignoreCase = true) -> Qualities.P1080.value
-                                serverName.contains("جوال", ignoreCase = true) -> Qualities.P720.value
-                                serverName.contains("english", ignoreCase = true) -> Qualities.P1080.value
-                                else -> Qualities.Unknown.value
-                            }
-                            
-                            callback.invoke(
-                                newExtractorLink(
-                                    name,
-                                    "$name - $serverName",
-                                    streamUrl,
-                                    ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = serverUrl
-                                    this.quality = quality
-                                }
-                            )
-                            foundAnyLink = true
-                        }
+                    processAlbaPlayerPage(serverUrl, serverName, serverHtml, callback, processedUrls)?.let {
+                        foundAnyLink = true
                     }
                 } catch (e: Exception) {
-                    continue
-                }
-            }
-            
-            // =====================================
-            // STEP 5: Also get the stream from MAIN page as fallback
-            // =====================================
-            if (!foundAnyLink) {
-                val mainScripts = mainDoc.select("script").html()
-                val regex = Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""")
-                val match = regex.find(mainScripts)
-                
-                if (match != null) {
-                    val base64String = match.groupValues[1]
-                    val decodedUrl = decodeBase64(base64String)
-                    
-                    if (decodedUrl.isNotBlank()) {
-                        val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
+                    // Try without referer or with different headers
+                    try {
+                        val serverResponse = app.get(serverUrl, headers = mapOf(
+                            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                            "Accept-Language" to "en-US,en;q=0.9",
+                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                        ))
+                        val serverHtml = serverResponse.text
                         
-                        callback.invoke(
-                            newExtractorLink(
-                                name,
-                                "$name - بث رئيسي",
-                                streamUrl,
-                                ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = url
-                                this.quality = Qualities.P1080.value
-                            }
-                        )
-                        foundAnyLink = true
+                        processAlbaPlayerPage(serverUrl, serverName, serverHtml, callback, processedUrls)?.let {
+                            foundAnyLink = true
+                        }
+                    } catch (e2: Exception) {
+                        // Continue to next server
                     }
                 }
             }
@@ -319,6 +314,138 @@ class KooraLite : MainAPI() {
         }
         
         return foundAnyLink
+    }
+    
+    private suspend fun processAlbaPlayerPage(
+        pageUrl: String,
+        serverName: String,
+        html: String,
+        callback: (ExtractorLink) -> Unit,
+        processedUrls: MutableSet<String>
+    ): Boolean {
+        var foundLink = false
+        
+        try {
+            // =====================================
+            // METHOD 1: Look for AlbaPlayerControl in the HTML
+            // =====================================
+            val regexPatterns = listOf(
+                Regex("""AlbaPlayerControl\s*\(\s*['"]([A-Za-z0-9+/=]+)['"]\s*,\s*['"]hls['"]\s*\)"""),
+                Regex("""AlbaPlayerControl\s*\(\s*['"]([A-Za-z0-9+/=]+)['"]\s*,\s*['"]plyr['"]\s*\)"""),
+                Regex("""AlbaPlayerControl\s*\(\s*"([A-Za-z0-9+/=]+)"\s*,\s*"hls"\s*\)"""),
+                Regex("""AlbaPlayerControl\s*\(\s*"([A-Za-z0-9+/=]+)"\s*,\s*"plyr"\s*\)"""),
+                Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)"""),
+                Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','plyr'\)""")
+            )
+            
+            var base64String: String? = null
+            for (pattern in regexPatterns) {
+                val match = pattern.find(html)
+                if (match != null) {
+                    base64String = match.groupValues[1]
+                    break
+                }
+            }
+            
+            if (base64String != null) {
+                val decodedUrl = decodeBase64(base64String)
+                if (decodedUrl.isNotBlank() && !processedUrls.contains(decodedUrl)) {
+                    processedUrls.add(decodedUrl)
+                    
+                    val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
+                    
+                    // Assign quality based on server name
+                    val quality = when {
+                        serverName.contains("4k", ignoreCase = true) -> Qualities.P2160.value
+                        serverName.contains("hd", ignoreCase = true) -> Qualities.P1080.value
+                        serverName.contains("رئيسي", ignoreCase = true) -> Qualities.P1080.value
+                        serverName.contains("sd", ignoreCase = true) -> Qualities.P480.value
+                        serverName.contains("جوال", ignoreCase = true) -> Qualities.P720.value
+                        serverName.contains("english", ignoreCase = true) -> Qualities.P1080.value
+                        serverName.contains("احتياطي", ignoreCase = true) -> Qualities.P720.value
+                        else -> Qualities.P720.value
+                    }
+                    
+                    val extractorLink = newExtractorLink(
+                        name,
+                        "$serverName",
+                        streamUrl,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = pageUrl
+                        this.quality = quality
+                    }
+                    
+                    callback.invoke(extractorLink)
+                    foundLink = true
+                }
+            }
+            
+            // =====================================
+            // METHOD 2: Look for direct m3u8 URLs in the HTML
+            // =====================================
+            val m3u8Regex = Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""")
+            val m3u8Matches = m3u8Regex.findAll(html)
+            
+            for (match in m3u8Matches) {
+                val streamUrl = match.groupValues[1]
+                if (streamUrl.isNotBlank() && !processedUrls.contains(streamUrl)) {
+                    processedUrls.add(streamUrl)
+                    
+                    val extractorLink = newExtractorLink(
+                        name,
+                        "$serverName (Direct)",
+                        streamUrl,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = pageUrl
+                        this.quality = Qualities.P720.value
+                    }
+                    
+                    callback.invoke(extractorLink)
+                    foundLink = true
+                }
+            }
+            
+            // =====================================
+            // METHOD 3: Look for iframe embeds
+            // =====================================
+            val iframeRegex = Regex("""<iframe[^>]*src\s*=\s*["']([^"']+)["'][^>]*>""")
+            val iframeMatches = iframeRegex.findAll(html)
+            
+            for (match in iframeMatches) {
+                val iframeSrc = match.groupValues[1]
+                if (iframeSrc.isNotBlank() && iframeSrc.contains("albaplayer")) {
+                    try {
+                        val fullUrl = if (!iframeSrc.startsWith("http")) {
+                            val baseDomain = try {
+                                val uri = URI(pageUrl)
+                                "${uri.scheme}://${uri.host}"
+                            } catch (e: Exception) {
+                                "https://b.sia.watch"
+                            }
+                            if (iframeSrc.startsWith("/")) {
+                                "$baseDomain$iframeSrc"
+                            } else {
+                                "$baseDomain/$iframeSrc"
+                            }
+                        } else {
+                            iframeSrc
+                        }
+                        
+                        // Recursively process iframe
+                        foundLink = extractAllAlbaPlayerServers(fullUrl, callback) || foundLink
+                    } catch (e: Exception) {
+                        // Continue to next iframe
+                    }
+                }
+            }
+            
+        } catch (e: Exception) {
+            // Do nothing
+        }
+        
+        return foundLink
     }
 
     private fun fixUrl(url: String): String {
