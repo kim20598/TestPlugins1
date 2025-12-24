@@ -206,15 +206,15 @@ class KooraLite : MainAPI() {
             // STEP 3: Extract ALL server data from the HTML
             // =====================================
             // First try: Look for server menu in HTML
-            val serverMenuRegex = Regex("""<div[^>]*class\s*=\s*["'][^"']*aplr-menu[^"']*["'][^>]*>(.*?)</div>""", RegexOption.DOT_MODE)
+            val serverMenuRegex = Regex("""<div[^>]*class\s*=\s*["'][^"']*aplr-menu[^"']*["'][^>]*>.*?</div>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
             val serverMenuMatch = serverMenuRegex.find(html)
             
             val servers = mutableListOf<Pair<String, String>>()
             
             if (serverMenuMatch != null) {
-                val menuContent = serverMenuMatch.groupValues[1]
+                val menuContent = serverMenuMatch.value
                 // Extract server links from menu
-                val linkRegex = Regex("""<a[^>]*class\s*=\s*["'][^"']*aplr-link[^"']*["'][^>]*href\s*=\s*["']([^"']+)["'][^>]*>([^<]+)</a>""")
+                val linkRegex = Regex("""<a[^>]*class\s*=\s*["'][^"']*aplr-link[^"']*["'][^>]*href\s*=\s*["']([^"']+)["'][^>]*>([^<]+)</a>""", setOf(RegexOption.IGNORE_CASE))
                 val linkMatches = linkRegex.findAll(menuContent)
                 
                 linkMatches.forEach { match ->
@@ -239,7 +239,7 @@ class KooraLite : MainAPI() {
             // Fallback: Try to extract servers from any script
             if (servers.isEmpty()) {
                 // Look for servers in JavaScript variables
-                val serverRegex = Regex("""['"]?server['"]?\s*:\s*['"]([^'"]+)['"]""")
+                val serverRegex = Regex("""['"]?server['"]?\s*:\s*['"]([^'"]+)['"]""", setOf(RegexOption.IGNORE_CASE))
                 val serverMatches = serverRegex.findAll(html)
                 
                 serverMatches.forEachIndexed { index, match ->
@@ -291,7 +291,7 @@ class KooraLite : MainAPI() {
                         foundAnyLink = true
                     }
                 } catch (e: Exception) {
-                    // Try without referer or with different headers
+                    // Try with different headers
                     try {
                         val serverResponse = app.get(serverUrl, headers = mapOf(
                             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -330,12 +330,12 @@ class KooraLite : MainAPI() {
             // METHOD 1: Look for AlbaPlayerControl in the HTML
             // =====================================
             val regexPatterns = listOf(
-                Regex("""AlbaPlayerControl\s*\(\s*['"]([A-Za-z0-9+/=]+)['"]\s*,\s*['"]hls['"]\s*\)"""),
-                Regex("""AlbaPlayerControl\s*\(\s*['"]([A-Za-z0-9+/=]+)['"]\s*,\s*['"]plyr['"]\s*\)"""),
-                Regex("""AlbaPlayerControl\s*\(\s*"([A-Za-z0-9+/=]+)"\s*,\s*"hls"\s*\)"""),
-                Regex("""AlbaPlayerControl\s*\(\s*"([A-Za-z0-9+/=]+)"\s*,\s*"plyr"\s*\)"""),
-                Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)"""),
-                Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','plyr'\)""")
+                Regex("""AlbaPlayerControl\s*\(\s*['"]([A-Za-z0-9+/=]+)['"]\s*,\s*['"]hls['"]\s*\)""", setOf(RegexOption.IGNORE_CASE)),
+                Regex("""AlbaPlayerControl\s*\(\s*['"]([A-Za-z0-9+/=]+)['"]\s*,\s*['"]plyr['"]\s*\)""", setOf(RegexOption.IGNORE_CASE)),
+                Regex("""AlbaPlayerControl\s*\(\s*"([A-Za-z0-9+/=]+)"\s*,\s*"hls"\s*\)""", setOf(RegexOption.IGNORE_CASE)),
+                Regex("""AlbaPlayerControl\s*\(\s*"([A-Za-z0-9+/=]+)"\s*,\s*"plyr"\s*\)""", setOf(RegexOption.IGNORE_CASE)),
+                Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','hls'\)""", setOf(RegexOption.IGNORE_CASE)),
+                Regex("""AlbaPlayerControl\('([A-Za-z0-9+/=]+)','plyr'\)""", setOf(RegexOption.IGNORE_CASE))
             )
             
             var base64String: String? = null
@@ -384,7 +384,7 @@ class KooraLite : MainAPI() {
             // =====================================
             // METHOD 2: Look for direct m3u8 URLs in the HTML
             // =====================================
-            val m3u8Regex = Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""")
+            val m3u8Regex = Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""", setOf(RegexOption.IGNORE_CASE))
             val m3u8Matches = m3u8Regex.findAll(html)
             
             for (match in m3u8Matches) {
@@ -410,7 +410,7 @@ class KooraLite : MainAPI() {
             // =====================================
             // METHOD 3: Look for iframe embeds
             // =====================================
-            val iframeRegex = Regex("""<iframe[^>]*src\s*=\s*["']([^"']+)["'][^>]*>""")
+            val iframeRegex = Regex("""<iframe[^>]*src\s*=\s*["']([^"']+)["'][^>]*>""", setOf(RegexOption.IGNORE_CASE))
             val iframeMatches = iframeRegex.findAll(html)
             
             for (match in iframeMatches) {
