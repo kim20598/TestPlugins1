@@ -18,44 +18,12 @@ class VimeoExtractor : ExtractorApi() {
     ) {
         val videoId = url.substringAfterLast("/").substringBefore("?")
         
-        // Try multiple methods to extract Vimeo video
-        val methods = listOf(
-            { extractFromPlayerPage(videoId, referer, callback) },
-            { extractFromConfigApi(videoId, referer, callback) },
-            { extractFromOEmbed(videoId, referer, callback) },
-            { fallbackToEmbed(videoId, callback) }
-        )
-        
-        for (method in methods) {
-            try {
-                if (method()) {
-                    return  // Success, stop trying other methods
-                }
-            } catch (e: Exception) {
-                // Continue to next method
-            }
-        }
-        
-        // If all methods fail, use the fallback
-        fallbackToEmbed(videoId, callback)
-    }
-    
-    // Method 1: Extract from player page HTML
-    private suspend fun extractFromPlayerPage(videoId: String, referer: String?, callback: (ExtractorLink) -> Unit): Boolean {
         try {
+            // First, try to extract from the player page HTML (NEW IMPROVEMENT)
             val playerUrl = "https://player.vimeo.com/video/$videoId"
             val response = app.get(playerUrl, headers = mapOf(
                 "Referer" to (referer ?: "https://www.catsuka.com/"),
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language" to "en-US,en;q=0.5",
-                "Accept-Encoding" to "gzip, deflate, br",
-                "DNT" to "1",
-                "Connection" to "keep-alive",
-                "Upgrade-Insecure-Requests" to "1",
-                "Sec-Fetch-Dest" to "document",
-                "Sec-Fetch-Mode" to "navigate",
-                "Sec-Fetch-Site" to "cross-site"
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             ))
             
             if (response.isSuccessful) {
@@ -79,11 +47,9 @@ class VimeoExtractor : ExtractorApi() {
                                     referer = "https://vimeo.com/",
                                     headers = mapOf(
                                         "Referer" to "https://vimeo.com/",
-                                        "Origin" to "https://player.vimeo.com",
-                                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                                        "Origin" to "https://player.vimeo.com"
                                     )
                                 ).forEach(callback)
-                                return true
                             }
                         }
                         
@@ -91,76 +57,28 @@ class VimeoExtractor : ExtractorApi() {
                         files.dash?.cdns?.forEach { (cdnName, cdn) ->
                             cdn.url?.let { dashUrl ->
                                 callback.invoke(
-                                    ExtractorLink(
-                                        name = name,
+                                    newExtractorLink(
                                         source = name,
-                                        url = dashUrl,
-                                        referer = "https://vimeo.com/",
-                                        quality = Qualities.P1080.value
-                                    )
+                                        name = "Vimeo DASH",
+                                        url = dashUrl
+                                    ) {
+                                        this.referer = "https://vimeo.com/"
+                                        this.quality = Qualities.P1080.value
+                                    }
                                 )
-                                return true
-                            }
-                        }
-                        
-                        // Extract progressive videos
-                        files.progressive?.forEach { video ->
-                            video.url?.let { videoUrl ->
-                                val quality = video.quality ?: "unknown"
-                                callback.invoke(
-                                    ExtractorLink(
-                                        name = name,
-                                        source = name,
-                                        url = videoUrl,
-                                        referer = "https://vimeo.com/",
-                                        quality = getQuality(quality)
-                                    )
-                                )
-                                return true
                             }
                         }
                     }
-                }
-                
-                // Try alternative pattern for JSON
-                val altRegex = Regex(""""url":"(https://[^"]+\\.(?:m3u8|mp4)[^"]*)"""")
-                val altMatches = altRegex.findAll(html)
-                
-                for (match in altMatches) {
-                    var videoUrl = match.groupValues[1]
-                    videoUrl = videoUrl.replace("\\/", "/")
-                    
-                    if (videoUrl.contains(".m3u8")) {
-                        M3u8Helper.generateM3u8(
-                            source = name,
-                            streamUrl = videoUrl,
-                            referer = "https://vimeo.com/"
-                        ).forEach(callback)
-                        return true
-                    } else if (videoUrl.contains(".mp4")) {
-                        callback.invoke(
-                            ExtractorLink(
-                                name = name,
-                                source = name,
-                                url = videoUrl,
-                                referer = "https://vimeo.com/",
-                                quality = Qualities.P1080.value
-                            )
-                        )
-                        return true
-                    }
+                    return
                 }
             }
         } catch (e: Exception) {
-            // Continue to next method
+            // Fall back to original method
         }
         
-        return false
-    }
-    
-    // Method 2: Extract from config API
-    private suspend fun extractFromConfigApi(videoId: String, referer: String?, callback: (ExtractorLink) -> Unit): Boolean {
+        // ORIGINAL CODE (as fallback)
         try {
+            // Try Vimeo's player config API with proper headers
             val configUrl = "https://player.vimeo.com/video/$videoId/config"
             val response = app.get(
                 configUrl,
@@ -168,19 +86,13 @@ class VimeoExtractor : ExtractorApi() {
                     "Referer" to (referer ?: "https://www.catsuka.com/"),
                     "Origin" to "https://player.vimeo.com",
                     "Accept" to "application/json",
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept-Language" to "en-US,en;q=0.5",
-                    "Accept-Encoding" to "gzip, deflate, br",
-                    "DNT" to "1",
-                    "Connection" to "keep-alive",
-                    "Sec-Fetch-Dest" to "empty",
-                    "Sec-Fetch-Mode" to "cors",
-                    "Sec-Fetch-Site" to "same-site"
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
                 )
             )
             
             if (response.isSuccessful) {
                 val text = response.text
+                // Parse JSON manually
                 val json = tryParseJson<VimeoConfig>(text)
                 
                 json?.request?.files?.let { files ->
@@ -189,15 +101,15 @@ class VimeoExtractor : ExtractorApi() {
                         video.url?.let { videoUrl ->
                             val quality = video.quality ?: "unknown"
                             callback.invoke(
-                                ExtractorLink(
-                                    name = name,
+                                newExtractorLink(
                                     source = name,
-                                    url = videoUrl,
-                                    referer = "https://vimeo.com/",
-                                    quality = getQuality(quality)
-                                )
+                                    name = "Vimeo $quality",
+                                    url = videoUrl
+                                ) {
+                                    this.referer = "https://vimeo.com/"
+                                    this.quality = getQuality(quality)
+                                }
                             )
-                            return true
                         }
                     }
                     
@@ -212,60 +124,24 @@ class VimeoExtractor : ExtractorApi() {
                                 "Origin" to "https://player.vimeo.com"
                             )
                         ).forEach(callback)
-                        return true
                     }
                 }
+                return
             }
         } catch (e: Exception) {
-            // Continue to next method
+            // Try alternative method
         }
         
-        return false
-    }
-    
-    // Method 3: Try oEmbed API
-    private suspend fun extractFromOEmbed(videoId: String, referer: String?, callback: (ExtractorLink) -> Unit): Boolean {
-        try {
-            val oembedUrl = "https://vimeo.com/api/oembed.json?url=https://vimeo.com/$videoId"
-            val response = app.get(oembedUrl, headers = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Referer" to (referer ?: "https://www.catsuka.com/")
-            ))
-            
-            if (response.isSuccessful) {
-                val json = tryParseJson<Map<String, Any>>(response.text)
-                val html = json?.get("html") as? String
-                
-                if (html != null) {
-                    // Extract iframe src from oEmbed HTML
-                    val iframeRegex = Regex("""src=["'](https://player\.vimeo\.com/video/\d+[^"']*)["']""")
-                    val iframeMatch = iframeRegex.find(html)
-                    
-                    if (iframeMatch != null) {
-                        val iframeUrl = iframeMatch.groupValues[1]
-                        // Try to extract from this iframe URL
-                        return extractFromPlayerPage(videoId, referer, callback)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            // Continue to next method
-        }
-        
-        return false
-    }
-    
-    // Method 4: Fallback to embed
-    private fun fallbackToEmbed(videoId: String, callback: (ExtractorLink) -> Unit): Boolean {
+        // Fallback: Use embed URL and let CloudStream handle it
         callback.invoke(
-            ExtractorLink(
-                name = name,
+            newExtractorLink(
                 source = name,
-                url = "https://player.vimeo.com/video/$videoId",
-                referer = "https://vimeo.com/"
-            )
+                name = "Vimeo Embed",
+                url = "https://player.vimeo.com/video/$videoId"
+            ) {
+                this.referer = "https://vimeo.com/"
+            }
         )
-        return true
     }
     
     private fun getQuality(quality: String): Int {
@@ -282,7 +158,7 @@ class VimeoExtractor : ExtractorApi() {
         }
     }
 
-    // Data classes for player page JSON
+    // NEW data classes for the improved JSON parsing
     data class VimeoPlayerConfig(
         @JsonProperty("request") val request: VimeoPlayerRequest? = null
     )
@@ -293,8 +169,7 @@ class VimeoExtractor : ExtractorApi() {
 
     data class VimeoPlayerFiles(
         @JsonProperty("dash") val dash: VimeoDash? = null,
-        @JsonProperty("hls") val hls: VimeoHls? = null,
-        @JsonProperty("progressive") val progressive: List<ProgressiveVideo>? = null
+        @JsonProperty("hls") val hls: VimeoHls? = null
     )
 
     data class VimeoDash(
@@ -309,7 +184,7 @@ class VimeoExtractor : ExtractorApi() {
         @JsonProperty("url") val url: String? = null
     )
 
-    // Data classes for config API JSON
+    // ORIGINAL data classes (keep for compatibility)
     data class VimeoConfig(
         @JsonProperty("request") val request: VimeoRequest? = null
     )
