@@ -1,11 +1,11 @@
 package com.kooralite
 
+import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 import java.net.URI
-import android.util.Base64
 
 class BeinLive : MainAPI() {
 
@@ -18,12 +18,7 @@ class BeinLive : MainAPI() {
     private val customPosterUrl =
         "https://raw.githubusercontent.com/kim20598/TestPlugins1/master/beinlive/poster.png"
 
-    // ====================== utils ======================
-
-    private fun decodeBase64(encoded: String): String =
-        runCatching {
-            String(Base64.decode(encoded, Base64.DEFAULT))
-        }.getOrElse { encoded }
+    // ========================= Utils =========================
 
     private fun fixUrl(url: String): String = when {
         url.isBlank() -> ""
@@ -33,7 +28,12 @@ class BeinLive : MainAPI() {
         else -> "$mainUrl/$url"
     }
 
-    // ====================== search item ======================
+    private fun decodeBase64(encoded: String): String =
+        runCatching {
+            String(Base64.decode(encoded, Base64.DEFAULT))
+        }.getOrElse { encoded }
+
+    // ========================= Search Item =========================
 
     private fun Element.toMatchSearchResponse(): SearchResponse? {
         val link = selectFirst("a")?.attr("href") ?: return null
@@ -76,7 +76,7 @@ class BeinLive : MainAPI() {
         }
     }
 
-    // ====================== main page ======================
+    // ========================= Main Page =========================
 
     override val mainPage = mainPageOf(
         "$mainUrl/" to "الرئيسية",
@@ -92,26 +92,26 @@ class BeinLive : MainAPI() {
     ): HomePageResponse {
 
         val url = if (page > 1) "${request.data}page/$page/" else request.data
-        val doc = app.get(url).document
+        val document = app.get(url).document
 
-        val items = doc.select(".albaflex .AY_Match, .AY_Match")
+        val items = document.select(".albaflex .AY_Match, .AY_Match")
             .mapNotNull { it.toMatchSearchResponse() }
 
         return newHomePageResponse(request.name, items, hasNext = true)
     }
 
-    // ====================== search ======================
+    // ========================= Search =========================
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.length < 2) return emptyList()
 
-        val url = "$mainUrl/?s=${URLEncoder.encode(query, "UTF-8")}"
-        return app.get(url).document
-            .select(".AY_Match, article")
+        val searchUrl = "$mainUrl/?s=${URLEncoder.encode(query, "UTF-8")}"
+        return app.get(searchUrl).document
+            .select(".AY_Match, .match-item, article")
             .mapNotNull { it.toMatchSearchResponse() }
     }
 
-    // ====================== load ======================
+    // ========================= Load =========================
 
     override suspend fun load(url: String): LoadResponse {
         val parts = url.split("|")
@@ -147,7 +147,7 @@ class BeinLive : MainAPI() {
         }
     }
 
-    // ====================== load links ======================
+    // ========================= Load Links =========================
 
     override suspend fun loadLinks(
         data: String,
@@ -157,24 +157,25 @@ class BeinLive : MainAPI() {
     ): Boolean {
 
         val pageUrl = fixUrl(data.substringBefore("|"))
-        val doc = app.get(pageUrl).document
+        val document = app.get(pageUrl).document
         val visited = mutableSetOf<String>()
-        var found = false
+        var foundLinks = false
 
-        fun process(url: String) {
-            if (!visited.add(url)) return
-            found = extractAllAlbaPlayerStreams(url, callback, visited) || found
-        }
-
-        doc.select("iframe[src], .video-serv a[href]").forEach {
+        document.select("iframe[src], .video-serv a[href]").forEach {
             val src = fixUrl(it.attr("src").ifBlank { it.attr("href") })
-            if (src.isNotBlank()) process(src)
+            if (src.isNotBlank() && visited.add(src)) {
+                foundLinks = extractAllAlbaPlayerStreams(
+                    src,
+                    callback,
+                    visited
+                ) || foundLinks
+            }
         }
 
-        return found
+        return foundLinks
     }
 
-    // ====================== extractor ======================
+    // ========================= AlbaPlayer Extractor =========================
 
     private suspend fun extractAllAlbaPlayerStreams(
         url: String,
@@ -190,13 +191,14 @@ class BeinLive : MainAPI() {
             .findAll(html)
             .forEach {
                 val decoded = decodeBase64(it.groupValues[1])
-                val stream = if (decoded.startsWith("http")) decoded else "https://$decoded"
+                val streamUrl =
+                    if (decoded.startsWith("http")) decoded else "https://$decoded"
 
                 callback(
                     newExtractorLink(
                         name,
                         "AlbaPlayer",
-                        stream,
+                        streamUrl,
                         ExtractorLinkType.M3U8
                     ) {
                         referer = url
@@ -224,8 +226,8 @@ class BeinLive : MainAPI() {
                 found = true
             }
 
-        // Server menu recursion (safe)
-        val base = runCatching {
+        // Server menu (safe recursion)
+        val baseDomain = runCatching {
             URI(url).let { "${it.scheme}://${it.host}" }
         }.getOrElse { "" }
 
@@ -233,9 +235,15 @@ class BeinLive : MainAPI() {
             .findAll(html)
             .forEach {
                 val link = it.groupValues[1]
-                val full = if (link.startsWith("http")) link else "$base$link"
-                if (visited.add(full)) {
-                    found = extractAllAlbaPlayerStreams(full, callback, visited) || found
+                val fullUrl =
+                    if (link.startsWith("http")) link else "$baseDomain$link"
+
+                if (visited.add(fullUrl)) {
+                    found = extractAllAlbaPlayerStreams(
+                        fullUrl,
+                        callback,
+                        visited
+                    ) || found
                 }
             }
 
