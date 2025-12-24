@@ -83,21 +83,6 @@ class BeinLive : MainAPI() {
         
         return null
     }
-    
-    private fun extractTeamsFromTitle(title: String): Pair<String, String> {
-        val cleanTitle = title
-            .replace("في", "vs")
-            .replace("و", "vs")
-            .replace("ضد", "vs")
-            .replace("مع", "vs")
-        
-        val parts = cleanTitle.split("vs", "VS", "Vs", limit = 2)
-        return if (parts.size == 2) {
-            parts[0].trim() to parts[1].trim()
-        } else {
-            "فريق 1" to "فريق 2"
-        }
-    }
 
     // ========================= Main Page =========================
 
@@ -284,11 +269,10 @@ class BeinLive : MainAPI() {
                             name,
                             "M3U8 Stream",
                             streamUrl,
-                            url,
-                            Qualities.Unknown.value,
                             type = ExtractorLinkType.M3U8
                         ) {
                             this.referer = url
+                            this.quality = Qualities.Unknown.value
                         }
                     )
                     found = true
@@ -307,11 +291,10 @@ class BeinLive : MainAPI() {
                                     name,
                                     "Base64 Stream",
                                     decoded,
-                                    url,
-                                    Qualities.Unknown.value,
                                     type = ExtractorLinkType.M3U8
                                 ) {
                                     this.referer = url
+                                    this.quality = Qualities.Unknown.value
                                 }
                             )
                             found = true
@@ -337,11 +320,10 @@ class BeinLive : MainAPI() {
                                 name,
                                 "Player Stream",
                                 streamUrl,
-                                url,
-                                Qualities.Unknown.value,
                                 type = ExtractorLinkType.M3U8
                             ) {
                                 this.referer = url
+                                this.quality = Qualities.Unknown.value
                             }
                         )
                         found = true
@@ -378,11 +360,10 @@ class BeinLive : MainAPI() {
                         name,
                         "Clappr Player",
                         streamUrl,
-                        url,
-                        Qualities.Unknown.value,
                         type = ExtractorLinkType.M3U8
                     ) {
                         this.referer = url
+                        this.quality = Qualities.Unknown.value
                     }
                 )
                 found = true
@@ -400,11 +381,10 @@ class BeinLive : MainAPI() {
                         name,
                         "Video Source",
                         fullUrl,
-                        url,
-                        Qualities.Unknown.value,
                         type = if (src.contains("m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                     ) {
                         this.referer = url
+                        this.quality = Qualities.Unknown.value
                     }
                 )
                 found = true
