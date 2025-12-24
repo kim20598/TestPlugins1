@@ -38,7 +38,6 @@ class KooraLite : MainAPI() {
         
         val poster = customPosterUrl
 
-        // Get status
         val statusClass = classNames().firstOrNull { it in listOf("live", "finished", "coming-soon") } ?: ""
         val statusText = when (statusClass) {
             "live" -> "🔴 مباشر"
@@ -61,7 +60,6 @@ class KooraLite : MainAPI() {
             "$statusText $title"
         }
 
-        // Store match data
         val matchData = listOf(title, time, tournament, statusClass, poster, team1, team2, "", "")
             .joinToString("|")
         val dataUrl = "$href|$matchData"
@@ -268,11 +266,12 @@ class KooraLite : MainAPI() {
                             
                             // Determine quality from server name
                             val quality = determineQualityFromName(serverName)
+                            val qualityLabel = getQualityLabel(quality)
                             
                             // Create ExtractorLink for THIS quality
                             val extractorLink = newExtractorLink(
                                 name,
-                                "$serverName [$quality]",
+                                "$serverName [$qualityLabel]",
                                 streamUrl,
                                 ExtractorLinkType.M3U8
                             ) {
@@ -282,9 +281,6 @@ class KooraLite : MainAPI() {
                             
                             callback.invoke(extractorLink)
                             foundAnyLink = true
-                            
-                            // Debug output
-                            app.log("Found stream: $serverName | Quality: $quality | URL: $streamUrl")
                         }
                     }
                     
@@ -299,10 +295,11 @@ class KooraLite : MainAPI() {
                             processedUrls.add(streamUrl)
                             
                             val quality = determineQualityFromName(serverName)
+                            val qualityLabel = getQualityLabel(quality)
                             
                             val extractorLink = newExtractorLink(
                                 name,
-                                "$serverName (Direct) [$quality]",
+                                "$serverName (Direct) [$qualityLabel]",
                                 streamUrl,
                                 ExtractorLinkType.M3U8
                             ) {
@@ -378,6 +375,21 @@ class KooraLite : MainAPI() {
             serverName.contains("240", ignoreCase = true) -> Qualities.P240.value
             
             else -> Qualities.P720.value  // Default to 720p
+        }
+    }
+    
+    /**
+     * Convert quality value to readable label
+     */
+    private fun getQualityLabel(quality: Int): String {
+        return when (quality) {
+            Qualities.P2160.value -> "4K"
+            Qualities.P1080.value -> "1080p"
+            Qualities.P720.value -> "720p"
+            Qualities.P480.value -> "480p"
+            Qualities.P360.value -> "360p"
+            Qualities.P240.value -> "240p"
+            else -> "Unknown"
         }
     }
 
