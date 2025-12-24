@@ -11,7 +11,7 @@ class KooraLite : MainAPI() {
     override var name = "KooraLite - كورة لايت"
     override var lang = "ar"
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.Movie)
+    override val supportedTypes = setOf(TvType.Live)
     
     private val customPosterUrl = "https://raw.githubusercontent.com/kim20598/TestPlugins1/master/kooralite/images.png"
 
@@ -264,23 +264,24 @@ class KooraLite : MainAPI() {
                             
                             val streamUrl = if (decodedUrl.startsWith("http")) decodedUrl else "https://$decodedUrl"
                             
-                            // Determine quality from server name
-                            val quality = determineQualityFromName(serverName)
-                            val qualityLabel = getQualityLabel(quality)
-                            
-                            // Create ExtractorLink for THIS quality
-                            val extractorLink = newExtractorLink(
-                                name,
-                                "$serverName [$qualityLabel]",
-                                streamUrl,
-                                ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = sourceUrl
-                                this.quality = quality
+                            // Check if this is an m3u8 playlist with multiple qualities
+                            if (streamUrl.contains(".m3u8")) {
+                                // Try to extract quality variants from the m3u8
+                                foundAnyLink = extractQualitiesFromM3u8(streamUrl, sourceUrl, serverName, callback) || foundAnyLink
+                            } else {
+                                // Fallback: create single link
+                                val extractorLink = newExtractorLink(
+                                    name,
+                                    serverName,
+                                    streamUrl,
+                                    ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = sourceUrl
+                                    this.quality = Qualities.P720.value
+                                }
+                                callback.invoke(extractorLink)
+                                foundAnyLink = true
                             }
-                            
-                            callback.invoke(extractorLink)
-                            foundAnyLink = true
                         }
                     }
                     
@@ -294,21 +295,22 @@ class KooraLite : MainAPI() {
                         if (streamUrl.contains("m3u8") && !processedUrls.contains(streamUrl)) {
                             processedUrls.add(streamUrl)
                             
-                            val quality = determineQualityFromName(serverName)
-                            val qualityLabel = getQualityLabel(quality)
-                            
-                            val extractorLink = newExtractorLink(
-                                name,
-                                "$serverName (Direct) [$qualityLabel]",
-                                streamUrl,
-                                ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = sourceUrl
-                                this.quality = quality
+                            // Check if this is an m3u8 playlist with multiple qualities
+                            if (streamUrl.contains(".m3u8")) {
+                                foundAnyLink = extractQualitiesFromM3u8(streamUrl, sourceUrl, "$serverName (Direct)", callback) || foundAnyLink
+                            } else {
+                                val extractorLink = newExtractorLink(
+                                    name,
+                                    "$serverName (Direct)",
+                                    streamUrl,
+                                    ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = sourceUrl
+                                    this.quality = Qualities.P720.value
+                                }
+                                callback.invoke(extractorLink)
+                                foundAnyLink = true
                             }
-                            
-                            callback.invoke(extractorLink)
-                            foundAnyLink = true
                         }
                     }
                     
@@ -330,7 +332,7 @@ class KooraLite : MainAPI() {
                         
                         val extractorLink = newExtractorLink(
                             name,
-                            "YouTube [720p]",
+                            "YouTube",
                             youtubeUrl,
                             ExtractorLinkType.M3U8
                         ) {
@@ -351,30 +353,158 @@ class KooraLite : MainAPI() {
     }
     
     /**
-     * Determine quality value from server name
+     * Extract quality variants from an m3u8 playlist
      */
-    private fun determineQualityFromName(serverName: String): Int {
+    private suspend fun extractQualitiesFromM3u8(
+        m3u8Url: String,
+        referer: String,
+        serverName: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        var foundLinks = false
+        
+        try {
+            // Download the m3u8 playlist
+            val response = app.get(m3u8Url, referer = referer)
+            val content = response.text
+            
+            if (content.isBlank()) return false
+            
+            // Parse the m3u8 to find quality variants
+            val lines = content.lines()
+            val qualityMap = mutableMapOf<String, Pair<String, Int>>()
+            
+            var currentBandwidth: String? = null
+            var currentResolution: String? = null
+            var currentUrl: String? = null
+            
+            for (line in lines) {
+                when {
+                    line.startsWith("#EXT-X-STREAM-INF:") -> {
+                        // Extract bandwidth and resolution
+                        currentBandwidth = extractM3u8Attribute(line, "BANDWIDTH")
+                        currentResolution = extractM3u8Attribute(line, "RESOLUTION")
+                    }
+                    !line.startsWith("#") && line.isNotBlank() -> {
+                        currentUrl = line
+                        
+                        // If we have all info, add to map
+                        if (currentBandwidth != null && currentUrl != null) {
+                            val quality = calculateQualityFromM3u8(currentBandwidth, currentResolution)
+                            qualityMap[currentUrl] = Pair("${getQualityLabel(quality)}", quality)
+                            
+                            // Reset for next variant
+                            currentBandwidth = null
+                            currentResolution = null
+                            currentUrl = null
+                        }
+                    }
+                }
+            }
+            
+            // If no variants found (simple m3u8), create single link
+            if (qualityMap.isEmpty()) {
+                val extractorLink = newExtractorLink(
+                    name,
+                    serverName,
+                    m3u8Url,
+                    ExtractorLinkType.M3U8
+                ) {
+                    this.referer = referer
+                    this.quality = Qualities.P720.value
+                }
+                callback.invoke(extractorLink)
+                foundLinks = true
+            } else {
+                // Create separate links for each quality variant
+                for ((variantUrl, qualityInfo) in qualityMap) {
+                    val (qualityLabel, qualityValue) = qualityInfo
+                    
+                    // Make sure variant URL is absolute
+                    val absoluteUrl = if (variantUrl.startsWith("http")) {
+                        variantUrl
+                    } else if (variantUrl.startsWith("/")) {
+                        // Extract base URL from m3u8Url
+                        val baseUrl = m3u8Url.substringBeforeLast("/")
+                        "$baseUrl/$variantUrl"
+                    } else {
+                        // Relative URL
+                        val baseUrl = m3u8Url.substringBeforeLast("/")
+                        "$baseUrl/$variantUrl"
+                    }
+                    
+                    val extractorLink = newExtractorLink(
+                        name,
+                        "$serverName [$qualityLabel]",
+                        absoluteUrl,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = referer
+                        this.quality = qualityValue
+                    }
+                    callback.invoke(extractorLink)
+                    foundLinks = true
+                }
+            }
+            
+        } catch (e: Exception) {
+            // Fallback: create single link if parsing fails
+            try {
+                val extractorLink = newExtractorLink(
+                    name,
+                    serverName,
+                    m3u8Url,
+                    ExtractorLinkType.M3U8
+                ) {
+                    this.referer = referer
+                    this.quality = Qualities.P720.value
+                }
+                callback.invoke(extractorLink)
+                foundLinks = true
+            } catch (e2: Exception) {
+                // Ignore
+            }
+        }
+        
+        return foundLinks
+    }
+    
+    /**
+     * Extract attribute from m3u8 EXT-X-STREAM-INF line
+     */
+    private fun extractM3u8Attribute(line: String, attribute: String): String? {
+        val regex = Regex("$attribute=(\\d+)")
+        return regex.find(line)?.groupValues?.get(1)
+    }
+    
+    /**
+     * Calculate quality from bandwidth and resolution
+     */
+    private fun calculateQualityFromM3u8(bandwidth: String?, resolution: String?): Int {
+        if (resolution != null) {
+            // Parse resolution like "1920x1080"
+            val parts = resolution.split("x")
+            if (parts.size == 2) {
+                val height = parts[1].toIntOrNull() ?: 0
+                return when {
+                    height >= 2160 -> Qualities.P2160.value
+                    height >= 1080 -> Qualities.P1080.value
+                    height >= 720 -> Qualities.P720.value
+                    height >= 480 -> Qualities.P480.value
+                    height >= 360 -> Qualities.P360.value
+                    else -> Qualities.P240.value
+                }
+            }
+        }
+        
+        // Fallback to bandwidth
+        val bandwidthValue = bandwidth?.toIntOrNull() ?: 0
         return when {
-            serverName.contains("4k", ignoreCase = true) -> Qualities.P2160.value
-            serverName.contains("2160", ignoreCase = true) -> Qualities.P2160.value
-            serverName.contains("فور كيه", ignoreCase = true) -> Qualities.P2160.value
-            
-            serverName.contains("1080", ignoreCase = true) -> Qualities.P1080.value
-            serverName.contains("فول اتش دي", ignoreCase = true) -> Qualities.P1080.value
-            serverName.contains("full hd", ignoreCase = true) -> Qualities.P1080.value
-            serverName.contains("hd", ignoreCase = true) -> Qualities.P1080.value
-            serverName.contains("رئيسي", ignoreCase = true) -> Qualities.P1080.value
-            
-            serverName.contains("720", ignoreCase = true) -> Qualities.P720.value
-            serverName.contains("hd ready", ignoreCase = true) -> Qualities.P720.value
-            
-            serverName.contains("480", ignoreCase = true) -> Qualities.P480.value
-            serverName.contains("sd", ignoreCase = true) -> Qualities.P480.value
-            
-            serverName.contains("360", ignoreCase = true) -> Qualities.P360.value
-            serverName.contains("240", ignoreCase = true) -> Qualities.P240.value
-            
-            else -> Qualities.P720.value  // Default to 720p
+            bandwidthValue >= 8000000 -> Qualities.P2160.value  // 8+ Mbps for 4K
+            bandwidthValue >= 4000000 -> Qualities.P1080.value  // 4+ Mbps for 1080p
+            bandwidthValue >= 2000000 -> Qualities.P720.value   // 2+ Mbps for 720p
+            bandwidthValue >= 1000000 -> Qualities.P480.value   // 1+ Mbps for 480p
+            else -> Qualities.P360.value
         }
     }
     
@@ -389,7 +519,7 @@ class KooraLite : MainAPI() {
             Qualities.P480.value -> "480p"
             Qualities.P360.value -> "360p"
             Qualities.P240.value -> "240p"
-            else -> "Unknown"
+            else -> "Auto"
         }
     }
 
