@@ -64,7 +64,7 @@ class KooraLite : MainAPI() {
             .joinToString("|")
         val dataUrl = "$href|$matchData"
 
-        return newMovieSearchResponse(enhancedTitle, dataUrl, TvType.Movie) {
+        return newMovieSearchResponse(enhancedTitle, dataUrl, TvType.Live) {
             this.posterUrl = poster
         }
     }
@@ -140,7 +140,7 @@ class KooraLite : MainAPI() {
             }
         }
 
-        return newMovieLoadResponse(title, url, TvType.Movie, actualUrl) {
+        return newMovieLoadResponse(title, url, TvType.Live, actualUrl) {
             this.posterUrl = poster
             this.plot = description.trim()
         }
