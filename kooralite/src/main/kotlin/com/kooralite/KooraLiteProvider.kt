@@ -7,8 +7,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class KooraLiteProvider : Plugin() {
     override fun load(context: Context) {
-        // Register both providers
         registerMainAPI(KooraLite())
-        registerMainAPI(BeinLive())
     }
+
 }
