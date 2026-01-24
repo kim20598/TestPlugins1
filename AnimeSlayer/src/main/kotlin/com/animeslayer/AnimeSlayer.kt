@@ -179,71 +179,36 @@ class AnimeSlayer : MainAPI() {
                     val container = serverContainers[episode - 1]
                     val servers = container.select(".ul-server-position1 li")
                     
+                    // Try each server in order
                     servers.forEach { server ->
                         val dataValue = server.attr("data-url").ifBlank { server.attr("data") }
                         if (dataValue.isNotBlank()) {
                             val serverType = server.attr("type")?.lowercase() ?: server.attr("class")?.lowercase() ?: ""
-                            val serverName = server.text().trim()
                             
-                            // Determine quality
-                            val qualityData = server.attr("quality-data").lowercase()
-                            val quality = when {
-                                qualityData.contains("fhd") -> Qualities.P1080.value
-                                qualityData.contains("hd") -> Qualities.P720.value
-                                qualityData.contains("sd") -> Qualities.P480.value
-                                else -> Qualities.Unknown.value
-                            }
-                            
-                            when {
+                            val extractedUrl = when {
                                 serverType.contains("vanfem") -> {
                                     // VanFem links
-                                    val vanfemUrl = "https://vanfem.com/e/$dataValue"
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            name,
-                                            "VanFem",
-                                            vanfemUrl
-                                        ) {
-                                            this.quality = quality
-                                            this.isM3u8 = false
-                                        }
-                                    )
-                                    return true
+                                    "https://vanfem.com/e/$dataValue"
                                 }
                                 serverType.contains("mega") -> {
                                     // Mega.nz links
-                                    val megaUrl = if (dataValue.startsWith(":/")) {
+                                    if (dataValue.startsWith(":/")) {
                                         "https://mega.nz$dataValue"
                                     } else if (dataValue.contains("#")) {
                                         "https://mega.nz/file/$dataValue"
                                     } else {
                                         "https://mega.nz/file/${dataValue}#${dataValue.substringAfterLast('/')}"
                                     }
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            name,
-                                            "MEGA",
-                                            megaUrl
-                                        ) {
-                                            this.quality = quality
-                                            this.isM3u8 = false
-                                        }
-                                    )
-                                    return true
                                 }
                                 serverType.contains("drive") -> {
                                     // Google Drive links
-                                    val driveUrl = "https://drive.google.com/file/d/$dataValue/view"
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            name,
-                                            "Google Drive",
-                                            driveUrl
-                                        ) {
-                                            this.quality = quality
-                                            this.isM3u8 = false
-                                        }
-                                    )
+                                    "https://drive.google.com/file/d/$dataValue/view"
+                                }
+                                else -> null
+                            }
+                            
+                            if (extractedUrl != null) {
+                                if (loadExtractor(extractedUrl, mainUrl, subtitleCallback, callback)) {
                                     return true
                                 }
                             }
