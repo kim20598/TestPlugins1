@@ -3,7 +3,7 @@ version = 4
 
 plugins {
     id("com.android.library")
-    id("org.jetbrains.kotlin.android")
+    id("kotlin-android")
     id("org.jetbrains.kotlin.plugin.serialization") version "2.3.0"
 }
 
@@ -25,11 +25,8 @@ android {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
-
-    kotlinOptions {
-        jvmTarget = "1.8"
-        freeCompilerArgs = listOf("-XXLanguage:+BreakContinueInInlineLambdas")
-    }
+    
+    // REMOVE the problematic kotlinOptions block entirely
 }
 
 dependencies {
@@ -45,26 +42,9 @@ dependencies {
 
 cloudstream {
     language = "ar"
-
     authors = listOf("kim20598")
-
-    /**
-     * Status int as the following:
-     * 0: Down
-     * 1: Ok
-     * 2: Slow
-     * 3: Beta only
-     */
     status = 1
-
-    tvTypes = listOf(
-        "Movie",
-        "TvSeries",
-        "Anime"
-    )
-
-    iconUrl = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://a.asd.homes&size=%size%"
+    tvTypes = listOf("Movie", "TvSeries", "Anime")
+    iconUrl = "https://t2.gstatic.com/faviconV2?client=SOCIAL&amp;type=FAVICON&amp;fallback_opts=TYPE,SIZE,URL&amp;url=https://a.asd.homes&amp;size=%size%"
     isCrossPlatform = true
 }
-
-
