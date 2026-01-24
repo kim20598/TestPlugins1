@@ -1,7 +1,6 @@
 package com.animeslayer.provider
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
@@ -58,9 +57,7 @@ class AnimeSlayer : MainAPI() {
             
             return newAnimeSearchResponse(title, href) {
                 this.posterUrl = posterUrl
-                if (episodeNum != null) {
-                    this.episodes = episodeNum
-                }
+                // Don't set episodes here as it requires MutableMap<DubStatus, Int>
             }
         } catch (e: Exception) {
             return null
@@ -297,13 +294,14 @@ class AnimeSlayer : MainAPI() {
                         val format = if (fullUrl.contains(".m3u8")) "M3U8" else "MP4"
                         
                         callback.invoke(
-                            ExtractorLink(
+                            newExtractorLink(
                                 source = name,
                                 name = "$format - $quality",
-                                url = fullUrl,
-                                referer = mainUrl,
-                                quality = getQualityValue(quality)
-                            )
+                                url = fullUrl
+                            ) {
+                                this.referer = mainUrl
+                                this.quality = getQualityValue(quality)
+                            }
                         )
                         foundLinks = true
                     }
@@ -342,13 +340,14 @@ class AnimeSlayer : MainAPI() {
                                 } else {
                                     val quality = extractQualityFromUrl(fullUrl)
                                     callback.invoke(
-                                        ExtractorLink(
+                                        newExtractorLink(
                                             source = name,
                                             name = "فيديو مباشر - $quality",
-                                            url = fullUrl,
-                                            referer = mainUrl,
-                                            quality = getQualityValue(quality)
-                                        )
+                                            url = fullUrl
+                                        ) {
+                                            this.referer = mainUrl
+                                            this.quality = getQualityValue(quality)
+                                        }
                                     )
                                 }
                                 foundLinks = true
