@@ -4,7 +4,7 @@ version = 4
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.serialization") version "1.9.0"
+    id("org.jetbrains.kotlin.plugin.serialization") version "2.2.0"
 }
 
 repositories {
@@ -66,3 +66,4 @@ cloudstream {
     iconUrl = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://a.asd.homes&size=%size%"
     isCrossPlatform = true
 }
+
