@@ -6,7 +6,7 @@ cloudstream {
     language = "ar"
     // All of these properties are optional, you can safely remove them
 
-    authors = listOf("kim20598")
+    authors = listOf("kkim20598")
 
     /**
      * Status int as the following:
