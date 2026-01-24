@@ -1,6 +1,7 @@
 package com.animeslayer.provider
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
@@ -57,7 +58,6 @@ class AnimeSlayer : MainAPI() {
             
             return newAnimeSearchResponse(title, href) {
                 this.posterUrl = posterUrl
-                this.quality = SearchQuality.HD
                 if (episodeNum != null) {
                     this.episodes = episodeNum
                 }
@@ -92,20 +92,6 @@ class AnimeSlayer : MainAPI() {
             if (items.isEmpty()) {
                 document.select(".bsx").forEach { element ->
                     element.toSearchResult()?.let { items.add(it) }
-                }
-            }
-            
-            // Selector 3: Direct links
-            if (items.isEmpty()) {
-                document.select("a[href*='/anime/']").forEach { link ->
-                    val href = link.attr("href")
-                    if (href.contains("/anime/") && !href.contains("?") && href != "/anime/") {
-                        val title = link.text().trim().takeIf { it.isNotBlank() }
-                            ?: link.attr("title").takeIf { it.isNotBlank() }
-                            ?: return@forEach
-                        
-                        items.add(newAnimeSearchResponse(title, fixUrl(href)))
-                    }
                 }
             }
             
@@ -178,7 +164,7 @@ class AnimeSlayer : MainAPI() {
                 // Look for episode list
                 document.select("a[href*='/episode'], a[href*='/ep-'], a[href*='/watch/']").forEach { epLink ->
                     val epHref = epLink.attr("href").takeIf { it.isNotBlank() }
-                    if (epHref != null && epHref.contains("/episode") || epHref?.contains("/ep-") == true || epHref?.contains("/watch/") == true) {
+                    if (epHref != null && (epHref.contains("/episode") || epHref.contains("/ep-") == true || epHref.contains("/watch/"))) {
                         val epText = epLink.text().trim()
                         val epNum = extractEpisodeNumber(epText)
                         
@@ -228,7 +214,6 @@ class AnimeSlayer : MainAPI() {
                     this.posterUrl = poster
                     this.plot = plot
                     this.year = extractYear(document)
-                    this.recommendations = extractRecommendations(document)
                 }
             }
             
@@ -312,14 +297,13 @@ class AnimeSlayer : MainAPI() {
                         val format = if (fullUrl.contains(".m3u8")) "M3U8" else "MP4"
                         
                         callback.invoke(
-                            newExtractorLink(
+                            ExtractorLink(
                                 source = name,
                                 name = "$format - $quality",
-                                url = fullUrl
-                            ) {
-                                this.referer = mainUrl
-                                this.quality = getQualityValue(quality)
-                            }
+                                url = fullUrl,
+                                referer = mainUrl,
+                                quality = getQualityValue(quality)
+                            )
                         )
                         foundLinks = true
                     }
@@ -358,14 +342,13 @@ class AnimeSlayer : MainAPI() {
                                 } else {
                                     val quality = extractQualityFromUrl(fullUrl)
                                     callback.invoke(
-                                        newExtractorLink(
+                                        ExtractorLink(
                                             source = name,
                                             name = "فيديو مباشر - $quality",
-                                            url = fullUrl
-                                        ) {
-                                            this.referer = mainUrl
-                                            this.quality = getQualityValue(quality)
-                                        }
+                                            url = fullUrl,
+                                            referer = mainUrl,
+                                            quality = getQualityValue(quality)
+                                        )
                                     )
                                 }
                                 foundLinks = true
@@ -432,16 +415,6 @@ class AnimeSlayer : MainAPI() {
         val yearText = document.select(".year, .release-date, .date").text()
         val match = Regex("""\b(19\d{2}|20\d{2})\b""").find(yearText)
         return match?.value?.toIntOrNull()
-    }
-    
-    private fun extractRecommendations(document: org.jsoup.nodes.Document): List<SearchResponse> {
-        val recommendations = mutableListOf<SearchResponse>()
-        
-        document.select(".recommended, .similar, .bsx").take(10).forEach { element ->
-            element.toSearchResult()?.let { recommendations.add(it) }
-        }
-        
-        return recommendations
     }
     
     private fun extractQualityFromUrl(url: String): String {
