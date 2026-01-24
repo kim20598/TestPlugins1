@@ -40,13 +40,14 @@ class AnimeSlayerExtractor : ExtractorApi() {
                         ).forEach(callback)
                     } else {
                         callback.invoke(
-                            ExtractorLink(
+                            newExtractorLink(
                                 source = name,
                                 name = "فيديو مباشر",
-                                url = fullUrl,
-                                referer = mainUrl,
-                                quality = Qualities.Unknown.value
-                            )
+                                url = fullUrl
+                            ) {
+                                this.referer = mainUrl
+                                this.quality = Qualities.Unknown.value
+                            }
                         )
                     }
                 }
