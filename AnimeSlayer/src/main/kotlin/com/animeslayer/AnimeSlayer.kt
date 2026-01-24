@@ -163,42 +163,48 @@ class AnimeSlayer : MainAPI() {
                             serverType.contains("vanfem") -> {
                                 val vanfemUrl = "https://vanfem.com/e/$dataValue"
                                 callback.invoke(
-                                    ExtractorLink(
+                                    newExtractorLink(
                                         this.name,
                                         serverName,
                                         vanfemUrl,
-                                        this.mainUrl,
-                                        quality,
-                                        false
-                                    )
+                                        null, // type parameter
+                                    ) {
+                                        this.referer = this@AnimeSlayer.mainUrl
+                                        this.quality = quality
+                                        this.isM3u8 = false
+                                    }
                                 )
                                 return true
                             }
                             serverType.contains("mega") -> {
                                 val megaUrl = "https://mega.nz/file/$dataValue"
                                 callback.invoke(
-                                    ExtractorLink(
+                                    newExtractorLink(
                                         this.name,
                                         serverName,
                                         megaUrl,
-                                        this.mainUrl,
-                                        quality,
-                                        false
-                                    )
+                                        null, // type parameter
+                                    ) {
+                                        this.referer = this@AnimeSlayer.mainUrl
+                                        this.quality = quality
+                                        this.isM3u8 = false
+                                    }
                                 )
                                 return true
                             }
                             serverType.contains("drive") -> {
                                 val driveUrl = "https://drive.google.com/file/d/$dataValue/view"
                                 callback.invoke(
-                                    ExtractorLink(
+                                    newExtractorLink(
                                         this.name,
                                         serverName,
                                         driveUrl,
-                                        this.mainUrl,
-                                        quality,
-                                        false
-                                    )
+                                        null, // type parameter
+                                    ) {
+                                        this.referer = this@AnimeSlayer.mainUrl
+                                        this.quality = quality
+                                        this.isM3u8 = false
+                                    }
                                 )
                                 return true
                             }
