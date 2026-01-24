@@ -6,7 +6,6 @@ import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.Qualities
 
 class AnimeSlayerExtractor : ExtractorApi() {
     override val name = "أنمي سلاير استخراج"
@@ -20,61 +19,12 @@ class AnimeSlayerExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // Try to extract video from the page
-            val document = app.get(url, referer = referer ?: mainUrl).document
-            
-            // Method 1: Direct video links
-            val videoLinks = document.select("video source[src], video[src], a[href*='.mp4'], a[href*='.m3u8']")
-            videoLinks.forEach { element ->
-                val videoUrl = element.attr("src").takeIf { it.isNotBlank() }
-                    ?: element.attr("href").takeIf { it.isNotBlank() }
-                
-                if (videoUrl != null) {
-                    val fullUrl = fixUrl(videoUrl)
-                    
-                    if (fullUrl.contains(".m3u8")) {
-                        M3u8Helper.generateM3u8(
-                            source = name,
-                            streamUrl = fullUrl,
-                            referer = mainUrl
-                        ).forEach(callback)
-                    } else {
-                        callback.invoke(
-                            newExtractorLink(
-                                source = name,
-                                name = "فيديو مباشر",
-                                url = fullUrl
-                            ) {
-                                this.referer = mainUrl
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                    }
-                }
-            }
-            
-            // Method 2: Iframe extraction
-            document.select("iframe[src]").forEach { iframe ->
-                val iframeSrc = iframe.attr("src").takeIf { it.isNotBlank() }
-                if (iframeSrc != null) {
-                    val fullIframeUrl = fixUrl(iframeSrc)
-                    loadExtractor(fullIframeUrl, referer ?: mainUrl, subtitleCallback, callback)
-                }
-            }
-            
-        } catch (e: Exception) {
-            // Fallback to generic extractor
+            // For now, just pass through to generic extractor
+            // The main extraction is handled in AnimeSlayer.kt
             loadExtractor(url, referer, subtitleCallback, callback)
-        }
-    }
-    
-    private fun fixUrl(url: String): String {
-        if (url.isBlank()) return ""
-        return when {
-            url.startsWith("http") -> url
-            url.startsWith("//") -> "https:$url"
-            url.startsWith("/") -> "$mainUrl$url"
-            else -> url
+        } catch (e: Exception) {
+            // Fallback
+            loadExtractor(url, referer, subtitleCallback, callback)
         }
     }
 }
