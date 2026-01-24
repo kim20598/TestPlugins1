@@ -142,32 +142,82 @@ class AnimeSlayer : MainAPI() {
             
             // Get server containers
             val serverContainers = doc.select(".divv11")
-            if (serverContainers.size >= episode) {
+            if (serverContainers.isNotEmpty() && serverContainers.size >= episode) {
                 val container = serverContainers[episode - 1]
-                val servers = container.select(".ul-server-position1 li")
                 
-                servers.forEach { server ->
-                    val dataValue = server.attr("data-url").ifBlank { server.attr("data") }
-                    if (dataValue.isNotBlank()) {
-                        val serverType = server.attr("type") ?: server.attr("class")
-                        
-                        when {
-                            serverType.contains("vanfem") -> {
-                                val vanfemUrl = "https://vanfem.com/e/$dataValue"
-                                if (loadExtractor(vanfemUrl, mainUrl, subtitleCallback, callback)) {
+                // Try method 1: Direct links in .linkul
+                val directLinks = container.select(".linkul li a")
+                if (directLinks.isNotEmpty()) {
+                    directLinks.forEach { link ->
+                        val href = link.attr("href")
+                        if (href.isNotBlank()) {
+                            val serverName = link.text().trim()
+                            val qualityClass = link.parent()?.attr("class") ?: ""
+                            val quality = when {
+                                qualityClass.contains("FHD") || href.contains("FHD") -> Qualities.P1080.value
+                                qualityClass.contains("HD") -> Qualities.P720.value
+                                qualityClass.contains("SD") -> Qualities.P480.value
+                                else -> Qualities.Unknown.value
+                            }
+                            
+                            if (href.contains("mega.nz")) {
+                                // MEGA link
+                                if (loadExtractor(href, mainUrl, subtitleCallback, callback)) {
+                                    return true
+                                }
+                            } else if (href.contains("drive.google.com")) {
+                                // Google Drive link - use the direct download URL
+                                val driveId = extractDriveId(href)
+                                if (driveId != null) {
+                                    val directDriveUrl = "https://drive.google.com/u/0/uc?id=$driveId&export=download"
+                                    if (loadExtractor(directDriveUrl, mainUrl, subtitleCallback, callback)) {
+                                        return true
+                                    }
+                                }
+                            } else if (href.contains("vanfem.com")) {
+                                // VANFEM link
+                                if (loadExtractor(href, mainUrl, subtitleCallback, callback)) {
                                     return true
                                 }
                             }
-                            serverType.contains("mega") -> {
-                                val megaUrl = "https://mega.nz/file/$dataValue"
-                                if (loadExtractor(megaUrl, mainUrl, subtitleCallback, callback)) {
-                                    return true
-                                }
+                        }
+                    }
+                }
+                
+                // Try method 2: Data attributes in .ul-server-position1
+                val serverElements = container.select(".ul-server-position1 li")
+                if (serverElements.isNotEmpty()) {
+                    serverElements.forEach { server ->
+                        val dataValue = server.attr("data-url").ifBlank { server.attr("data") }
+                        if (dataValue.isNotBlank()) {
+                            val serverType = server.attr("type") ?: server.attr("class")
+                            val qualityData = server.attr("quality-data")
+                            val quality = when {
+                                qualityData.contains("FHD") -> Qualities.P1080.value
+                                qualityData.contains("HD") -> Qualities.P720.value
+                                qualityData.contains("SD") -> Qualities.P480.value
+                                else -> Qualities.Unknown.value
                             }
-                            serverType.contains("drive") -> {
-                                val driveUrl = "https://drive.google.com/file/d/$dataValue/view"
-                                if (loadExtractor(driveUrl, mainUrl, subtitleCallback, callback)) {
-                                    return true
+                            
+                            when {
+                                serverType.contains("vanfem") -> {
+                                    val vanfemUrl = "https://vanfem.com/e/$dataValue"
+                                    if (loadExtractor(vanfemUrl, mainUrl, subtitleCallback, callback)) {
+                                        return true
+                                    }
+                                }
+                                serverType.contains("mega") -> {
+                                    val megaUrl = "https://mega.nz/file/$dataValue"
+                                    if (loadExtractor(megaUrl, mainUrl, subtitleCallback, callback)) {
+                                        return true
+                                    }
+                                }
+                                serverType.contains("drive") -> {
+                                    val driveUrl = "https://drive.google.com/file/d/$dataValue/view"
+                                    val downloadUrl = "https://drive.google.com/u/0/uc?id=$dataValue&export=download"
+                                    if (loadExtractor(downloadUrl, mainUrl, subtitleCallback, callback)) {
+                                        return true
+                                    }
                                 }
                             }
                         }
@@ -177,8 +227,25 @@ class AnimeSlayer : MainAPI() {
             
             false
         } catch (e: Exception) {
+            e.printStackTrace()
             false
         }
+    }
+    
+    private fun extractDriveId(url: String): String? {
+        val patterns = listOf(
+            Regex("""id=([^&]+)"""),
+            Regex("""/file/d/([^/]+)"""),
+            Regex("""/u/0/uc\?id=([^&]+)"""),
+            Regex("""drive.google.com.*/([^/?]+)""")
+        )
+        
+        for (pattern in patterns) {
+            pattern.find(url)?.groups?.get(1)?.value?.let {
+                return it
+            }
+        }
+        return null
     }
     
     private fun fixUrl(url: String): String {
