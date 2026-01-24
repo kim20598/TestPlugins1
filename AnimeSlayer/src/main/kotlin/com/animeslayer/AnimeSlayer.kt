@@ -168,9 +168,10 @@ class AnimeSlayer : MainAPI() {
                                         serverName,
                                         vanfemUrl,
                                         this.mainUrl,
-                                        quality,
-                                        false
-                                    )
+                                    ) {
+                                        this.quality = quality
+                                        this.isM3u8 = false
+                                    }
                                 )
                                 return true
                             }
@@ -182,9 +183,10 @@ class AnimeSlayer : MainAPI() {
                                         serverName,
                                         megaUrl,
                                         this.mainUrl,
-                                        quality,
-                                        false
-                                    )
+                                    ) {
+                                        this.quality = quality
+                                        this.isM3u8 = false
+                                    }
                                 )
                                 return true
                             }
@@ -196,9 +198,10 @@ class AnimeSlayer : MainAPI() {
                                         serverName,
                                         driveUrl,
                                         this.mainUrl,
-                                        quality,
-                                        false
-                                    )
+                                    ) {
+                                        this.quality = quality
+                                        this.isM3u8 = false
+                                    }
                                 )
                                 return true
                             }
