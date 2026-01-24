@@ -1,5 +1,6 @@
 package com.animeslayer.utils
 
+import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
 
 object AnimeSlayerUtils {
