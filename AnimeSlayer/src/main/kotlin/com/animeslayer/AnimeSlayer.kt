@@ -163,45 +163,42 @@ class AnimeSlayer : MainAPI() {
                             serverType.contains("vanfem") -> {
                                 val vanfemUrl = "https://vanfem.com/e/$dataValue"
                                 callback.invoke(
-                                    newExtractorLink(
+                                    ExtractorLink(
                                         this.name,
                                         serverName,
                                         vanfemUrl,
                                         this.mainUrl,
-                                    ) {
-                                        this.quality = quality
-                                        this.isM3u8 = false
-                                    }
+                                        quality,
+                                        false
+                                    )
                                 )
                                 return true
                             }
                             serverType.contains("mega") -> {
                                 val megaUrl = "https://mega.nz/file/$dataValue"
                                 callback.invoke(
-                                    newExtractorLink(
+                                    ExtractorLink(
                                         this.name,
                                         serverName,
                                         megaUrl,
                                         this.mainUrl,
-                                    ) {
-                                        this.quality = quality
-                                        this.isM3u8 = false
-                                    }
+                                        quality,
+                                        false
+                                    )
                                 )
                                 return true
                             }
                             serverType.contains("drive") -> {
                                 val driveUrl = "https://drive.google.com/file/d/$dataValue/view"
                                 callback.invoke(
-                                    newExtractorLink(
+                                    ExtractorLink(
                                         this.name,
                                         serverName,
                                         driveUrl,
                                         this.mainUrl,
-                                    ) {
-                                        this.quality = quality
-                                        this.isM3u8 = false
-                                    }
+                                        quality,
+                                        false
+                                    )
                                 )
                                 return true
                             }
