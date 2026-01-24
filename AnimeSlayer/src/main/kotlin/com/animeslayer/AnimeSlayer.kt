@@ -77,39 +77,65 @@ class AnimeSlayer : MainAPI() {
         val isMovie = doc.selectFirst("span:contains(النوع:)")?.text()?.contains("فيلم") == true
             || doc.selectFirst(".typez.Movie") != null
         
-        // Extract episodes
+        // Extract episodes from the noscript element (more reliable)
         val episodes = mutableListOf<Episode>()
-        val episodeElements = doc.select("#EpList1 .CSB")
         
-        if (episodeElements.isNotEmpty() && !isMovie) {
-            episodeElements.forEachIndexed { index, element ->
-                val episodeNum = index + 1
-                val episodeName = element.text().trim()
-                
-                episodes.add(
-                    newEpisode("$url?ep=$episodeNum") {
-                        this.name = episodeName
-                        this.episode = episodeNum
-                        this.season = 1
-                    }
-                )
-            }
-        } else {
-            // Try to get episode count from info
-            val episodeInfo = doc.select("span:contains(الحلقات:)").firstOrNull()
-            val epCount = episodeInfo?.text()?.let {
-                Regex("""\d+""").find(it)?.value?.toIntOrNull()
-            }
+        // First check in the noscript element
+        val noscriptElement = doc.selectFirst("noscript#diplayer")
+        if (noscriptElement != null) {
+            val noscriptHtml = noscriptElement.html()
+            val noscriptDoc = org.jsoup.Jsoup.parse(noscriptHtml)
             
-            if (epCount != null && epCount > 0 && !isMovie) {
-                for (i in 1..epCount) {
+            val episodeElements = noscriptDoc.select("#EpList1 .CSB")
+            if (episodeElements.isNotEmpty() && !isMovie) {
+                episodeElements.forEachIndexed { index, element ->
+                    val episodeNum = index + 1
+                    val episodeName = element.text().trim()
+                    
                     episodes.add(
-                        newEpisode("$url?ep=$i") {
-                            this.name = "الحلقة $i"
-                            this.episode = i
+                        newEpisode("$url?ep=$episodeNum") {
+                            this.name = episodeName
+                            this.episode = episodeNum
                             this.season = 1
                         }
                     )
+                }
+            }
+        }
+        
+        // If no episodes found in noscript, try regular way
+        if (episodes.isEmpty()) {
+            val episodeElements = doc.select("#EpList1 .CSB")
+            if (episodeElements.isNotEmpty() && !isMovie) {
+                episodeElements.forEachIndexed { index, element ->
+                    val episodeNum = index + 1
+                    val episodeName = element.text().trim()
+                    
+                    episodes.add(
+                        newEpisode("$url?ep=$episodeNum") {
+                            this.name = episodeName
+                            this.episode = episodeNum
+                            this.season = 1
+                        }
+                    )
+                }
+            } else {
+                // Try to get episode count from info
+                val episodeInfo = doc.select("span:contains(الحلقات:)").firstOrNull()
+                val epCount = episodeInfo?.text()?.let {
+                    Regex("""\d+""").find(it)?.value?.toIntOrNull()
+                }
+                
+                if (epCount != null && epCount > 0 && !isMovie) {
+                    for (i in 1..epCount) {
+                        episodes.add(
+                            newEpisode("$url?ep=$i") {
+                                this.name = "الحلقة $i"
+                                this.episode = i
+                                this.season = 1
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -140,84 +166,132 @@ class AnimeSlayer : MainAPI() {
             
             val doc = app.get(url).document
             
-            // Get server containers
-            val serverContainers = doc.select(".divv11")
-            if (serverContainers.isNotEmpty() && serverContainers.size >= episode) {
-                val container = serverContainers[episode - 1]
+            // First try to get links from the noscript element (the actual video links)
+            val noscriptElement = doc.selectFirst("noscript#diplayer")
+            if (noscriptElement != null) {
+                // Parse the HTML inside the noscript tag
+                val noscriptHtml = noscriptElement.html()
+                val noscriptDoc = org.jsoup.Jsoup.parse(noscriptHtml)
                 
-                // Try method 1: Direct links in .linkul
-                val directLinks = container.select(".linkul li a")
-                if (directLinks.isNotEmpty()) {
-                    directLinks.forEach { link ->
-                        val href = link.attr("href")
-                        if (href.isNotBlank()) {
-                            val serverName = link.text().trim()
-                            val qualityClass = link.parent()?.attr("class") ?: ""
+                // Get all divv11 containers (each contains servers for one episode)
+                val serverContainers = noscriptDoc.select(".divv11")
+                if (serverContainers.isNotEmpty() && serverContainers.size >= episode) {
+                    val container = serverContainers[episode - 1]
+                    val servers = container.select(".ul-server-position1 li")
+                    
+                    servers.forEach { server ->
+                        val dataValue = server.attr("data-url").ifBlank { server.attr("data") }
+                        if (dataValue.isNotBlank()) {
+                            val serverType = server.attr("type")?.lowercase() ?: server.attr("class")?.lowercase() ?: ""
+                            val serverName = server.text().trim()
+                            
+                            // Determine quality
+                            val qualityData = server.attr("quality-data").lowercase()
                             val quality = when {
-                                qualityClass.contains("FHD") || href.contains("FHD") -> Qualities.P1080.value
-                                qualityClass.contains("HD") -> Qualities.P720.value
-                                qualityClass.contains("SD") -> Qualities.P480.value
+                                qualityData.contains("fhd") -> Qualities.P1080.value
+                                qualityData.contains("hd") -> Qualities.P720.value
+                                qualityData.contains("sd") -> Qualities.P480.value
                                 else -> Qualities.Unknown.value
                             }
                             
-                            if (href.contains("mega.nz")) {
-                                // MEGA link
-                                if (loadExtractor(href, mainUrl, subtitleCallback, callback)) {
+                            when {
+                                serverType.contains("vanfem") -> {
+                                    // VanFem links
+                                    val vanfemUrl = "https://vanfem.com/e/$dataValue"
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            name,
+                                            "VanFem",
+                                            vanfemUrl,
+                                            "",
+                                            quality,
+                                            false,
+                                            null,
+                                            false
+                                        )
+                                    )
                                     return true
                                 }
-                            } else if (href.contains("drive.google.com")) {
-                                // Google Drive link - use the direct download URL
-                                val driveId = extractDriveId(href)
-                                if (driveId != null) {
-                                    val directDriveUrl = "https://drive.google.com/u/0/uc?id=$driveId&export=download"
-                                    if (loadExtractor(directDriveUrl, mainUrl, subtitleCallback, callback)) {
-                                        return true
+                                serverType.contains("mega") -> {
+                                    // Mega.nz links
+                                    val megaUrl = if (dataValue.startsWith(":/")) {
+                                        "https://mega.nz$dataValue"
+                                    } else if (dataValue.contains("#")) {
+                                        "https://mega.nz/file/$dataValue"
+                                    } else {
+                                        "https://mega.nz/file/${dataValue}#${dataValue.substringAfterLast('/')}"
                                     }
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            name,
+                                            "MEGA",
+                                            megaUrl,
+                                            "",
+                                            quality,
+                                            false,
+                                            null,
+                                            false
+                                        )
+                                    )
+                                    return true
                                 }
-                            } else if (href.contains("vanfem.com")) {
-                                // VANFEM link
-                                if (loadExtractor(href, mainUrl, subtitleCallback, callback)) {
+                                serverType.contains("drive") -> {
+                                    // Google Drive links
+                                    val driveUrl = "https://drive.google.com/file/d/$dataValue/view"
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            name,
+                                            "Google Drive",
+                                            driveUrl,
+                                            "",
+                                            quality,
+                                            false,
+                                            null,
+                                            false
+                                        )
+                                    )
                                     return true
                                 }
                             }
                         }
                     }
                 }
+            }
+            
+            // If not found in noscript, try the regular way (fallback)
+            val serverContainers = doc.select(".divv11")
+            if (serverContainers.isNotEmpty() && serverContainers.size >= episode) {
+                val container = serverContainers[episode - 1]
+                val servers = container.select(".ul-server-position1 li")
                 
-                // Try method 2: Data attributes in .ul-server-position1
-                val serverElements = container.select(".ul-server-position1 li")
-                if (serverElements.isNotEmpty()) {
-                    serverElements.forEach { server ->
-                        val dataValue = server.attr("data-url").ifBlank { server.attr("data") }
-                        if (dataValue.isNotBlank()) {
-                            val serverType = server.attr("type") ?: server.attr("class")
-                            val qualityData = server.attr("quality-data")
-                            val quality = when {
-                                qualityData.contains("FHD") -> Qualities.P1080.value
-                                qualityData.contains("HD") -> Qualities.P720.value
-                                qualityData.contains("SD") -> Qualities.P480.value
-                                else -> Qualities.Unknown.value
+                servers.forEach { server ->
+                    val dataValue = server.attr("data-url").ifBlank { server.attr("data") }
+                    if (dataValue.isNotBlank()) {
+                        val serverType = server.attr("type")?.lowercase() ?: server.attr("class")?.lowercase() ?: ""
+                        
+                        when {
+                            serverType.contains("vanfem") -> {
+                                val vanfemUrl = "https://vanfem.com/e/$dataValue"
+                                if (loadExtractor(vanfemUrl, mainUrl, subtitleCallback, callback)) {
+                                    return true
+                                }
                             }
-                            
-                            when {
-                                serverType.contains("vanfem") -> {
-                                    val vanfemUrl = "https://vanfem.com/e/$dataValue"
-                                    if (loadExtractor(vanfemUrl, mainUrl, subtitleCallback, callback)) {
-                                        return true
-                                    }
+                            serverType.contains("mega") -> {
+                                val megaUrl = if (dataValue.startsWith(":/")) {
+                                    "https://mega.nz$dataValue"
+                                } else if (dataValue.contains("#")) {
+                                    "https://mega.nz/file/$dataValue"
+                                } else {
+                                    "https://mega.nz/file/${dataValue}#${dataValue.substringAfterLast('/')}"
                                 }
-                                serverType.contains("mega") -> {
-                                    val megaUrl = "https://mega.nz/file/$dataValue"
-                                    if (loadExtractor(megaUrl, mainUrl, subtitleCallback, callback)) {
-                                        return true
-                                    }
+                                if (loadExtractor(megaUrl, mainUrl, subtitleCallback, callback)) {
+                                    return true
                                 }
-                                serverType.contains("drive") -> {
-                                    val driveUrl = "https://drive.google.com/file/d/$dataValue/view"
-                                    val downloadUrl = "https://drive.google.com/u/0/uc?id=$dataValue&export=download"
-                                    if (loadExtractor(downloadUrl, mainUrl, subtitleCallback, callback)) {
-                                        return true
-                                    }
+                            }
+                            serverType.contains("drive") -> {
+                                val driveUrl = "https://drive.google.com/file/d/$dataValue/view"
+                                if (loadExtractor(driveUrl, mainUrl, subtitleCallback, callback)) {
+                                    return true
                                 }
                             }
                         }
@@ -230,22 +304,6 @@ class AnimeSlayer : MainAPI() {
             e.printStackTrace()
             false
         }
-    }
-    
-    private fun extractDriveId(url: String): String? {
-        val patterns = listOf(
-            Regex("""id=([^&]+)"""),
-            Regex("""/file/d/([^/]+)"""),
-            Regex("""/u/0/uc\?id=([^&]+)"""),
-            Regex("""drive.google.com.*/([^/?]+)""")
-        )
-        
-        for (pattern in patterns) {
-            pattern.find(url)?.groups?.get(1)?.value?.let {
-                return it
-            }
-        }
-        return null
     }
     
     private fun fixUrl(url: String): String {
