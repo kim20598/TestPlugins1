@@ -202,13 +202,11 @@ class AnimeSlayer : MainAPI() {
                                         newExtractorLink(
                                             name,
                                             "VanFem",
-                                            vanfemUrl,
-                                            "",
-                                            quality,
-                                            false,
-                                            null,
-                                            false
-                                        )
+                                            vanfemUrl
+                                        ) {
+                                            this.quality = quality
+                                            this.isM3u8 = false
+                                        }
                                     )
                                     return true
                                 }
@@ -225,13 +223,11 @@ class AnimeSlayer : MainAPI() {
                                         newExtractorLink(
                                             name,
                                             "MEGA",
-                                            megaUrl,
-                                            "",
-                                            quality,
-                                            false,
-                                            null,
-                                            false
-                                        )
+                                            megaUrl
+                                        ) {
+                                            this.quality = quality
+                                            this.isM3u8 = false
+                                        }
                                     )
                                     return true
                                 }
@@ -242,13 +238,11 @@ class AnimeSlayer : MainAPI() {
                                         newExtractorLink(
                                             name,
                                             "Google Drive",
-                                            driveUrl,
-                                            "",
-                                            quality,
-                                            false,
-                                            null,
-                                            false
-                                        )
+                                            driveUrl
+                                        ) {
+                                            this.quality = quality
+                                            this.isM3u8 = false
+                                        }
                                     )
                                     return true
                                 }
