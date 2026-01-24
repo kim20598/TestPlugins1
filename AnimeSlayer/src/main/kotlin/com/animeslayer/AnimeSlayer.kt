@@ -87,12 +87,11 @@ class AnimeSlayer : MainAPI() {
                 val episodeName = element.text().trim()
                 
                 episodes.add(
-                    Episode(
-                        url = "$url?ep=$episodeNum",
-                        name = episodeName,
-                        episode = episodeNum,
-                        season = 1
-                    )
+                    newEpisode("$url?ep=$episodeNum") {
+                        this.name = episodeName
+                        this.episode = episodeNum
+                        this.season = 1
+                    }
                 )
             }
         } else {
@@ -105,12 +104,11 @@ class AnimeSlayer : MainAPI() {
             if (epCount != null && epCount > 0 && !isMovie) {
                 for (i in 1..epCount) {
                     episodes.add(
-                        Episode(
-                            url = "$url?ep=$i",
-                            name = "الحلقة $i",
-                            episode = i,
-                            season = 1
-                        )
+                        newEpisode("$url?ep=$i") {
+                            this.name = "الحلقة $i"
+                            this.episode = i
+                            this.season = 1
+                        }
                     )
                 }
             }
@@ -164,12 +162,12 @@ class AnimeSlayer : MainAPI() {
                         when {
                             serverType.contains("vanfem") -> {
                                 val vanfemUrl = "https://vanfem.com/e/$dataValue"
-                                callback(
+                                callback.invoke(
                                     ExtractorLink(
-                                        name,
-                                        "$serverName",
+                                        this.name,
+                                        serverName,
                                         vanfemUrl,
-                                        mainUrl,
+                                        this.mainUrl,
                                         quality,
                                         isM3u8 = false
                                     )
@@ -179,12 +177,12 @@ class AnimeSlayer : MainAPI() {
                             serverType.contains("mega") -> {
                                 // Handle MEGA links
                                 val megaUrl = "https://mega.nz/file/$dataValue"
-                                callback(
+                                callback.invoke(
                                     ExtractorLink(
-                                        name,
-                                        "$serverName",
+                                        this.name,
+                                        serverName,
                                         megaUrl,
-                                        mainUrl,
+                                        this.mainUrl,
                                         quality,
                                         isM3u8 = false
                                     )
@@ -194,12 +192,12 @@ class AnimeSlayer : MainAPI() {
                             serverType.contains("drive") -> {
                                 // Handle Google Drive links
                                 val driveUrl = "https://drive.google.com/file/d/$dataValue/view"
-                                callback(
+                                callback.invoke(
                                     ExtractorLink(
-                                        name,
-                                        "$serverName",
+                                        this.name,
+                                        serverName,
                                         driveUrl,
-                                        mainUrl,
+                                        this.mainUrl,
                                         quality,
                                         isM3u8 = false
                                     )
