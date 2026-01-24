@@ -149,60 +149,26 @@ class AnimeSlayer : MainAPI() {
                 servers.forEach { server ->
                     val dataValue = server.attr("data-url").ifBlank { server.attr("data") }
                     if (dataValue.isNotBlank()) {
-                        val serverName = server.text().trim()
-                        val quality = when {
-                            server.attr("quality-data").contains("FHD") -> Qualities.P1080.value
-                            server.attr("quality-data").contains("HD") -> Qualities.P720.value
-                            server.attr("quality-data").contains("SD") -> Qualities.P480.value
-                            else -> Qualities.Unknown.value
-                        }
-                        
                         val serverType = server.attr("type") ?: server.attr("class")
                         
                         when {
                             serverType.contains("vanfem") -> {
                                 val vanfemUrl = "https://vanfem.com/e/$dataValue"
-                                callback.invoke(
-                                    ExtractorLink(
-                                        this.name,
-                                        serverName,
-                                        vanfemUrl,
-                                        this.mainUrl,
-                                        quality,
-                                        isM3u8 = false
-                                    )
-                                )
-                                return true
+                                if (loadExtractor(vanfemUrl, mainUrl, subtitleCallback, callback)) {
+                                    return true
+                                }
                             }
                             serverType.contains("mega") -> {
-                                // Handle MEGA links
                                 val megaUrl = "https://mega.nz/file/$dataValue"
-                                callback.invoke(
-                                    ExtractorLink(
-                                        this.name,
-                                        serverName,
-                                        megaUrl,
-                                        this.mainUrl,
-                                        quality,
-                                        isM3u8 = false
-                                    )
-                                )
-                                return true
+                                if (loadExtractor(megaUrl, mainUrl, subtitleCallback, callback)) {
+                                    return true
+                                }
                             }
                             serverType.contains("drive") -> {
-                                // Handle Google Drive links
                                 val driveUrl = "https://drive.google.com/file/d/$dataValue/view"
-                                callback.invoke(
-                                    ExtractorLink(
-                                        this.name,
-                                        serverName,
-                                        driveUrl,
-                                        this.mainUrl,
-                                        quality,
-                                        isM3u8 = false
-                                    )
-                                )
-                                return true
+                                if (loadExtractor(driveUrl, mainUrl, subtitleCallback, callback)) {
+                                    return true
+                                }
                             }
                         }
                     }
