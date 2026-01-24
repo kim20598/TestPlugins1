@@ -1,13 +1,12 @@
 package com.animeslayer.provider
 
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.Qualities
 
 class AnimeSlayerExtractor : ExtractorApi() {
     override val name = "أنمي سلاير استخراج"
@@ -41,13 +40,13 @@ class AnimeSlayerExtractor : ExtractorApi() {
                         ).forEach(callback)
                     } else {
                         callback.invoke(
-                            newExtractorLink(
+                            ExtractorLink(
                                 source = name,
                                 name = "فيديو مباشر",
-                                url = fullUrl
-                            ) {
-                                this.referer = mainUrl
-                            }
+                                url = fullUrl,
+                                referer = mainUrl,
+                                quality = Qualities.Unknown.value
+                            )
                         )
                     }
                 }
@@ -62,104 +61,9 @@ class AnimeSlayerExtractor : ExtractorApi() {
                 }
             }
             
-            // Method 3: JSON API extraction
-            try {
-                extractFromScripts(document, url, subtitleCallback, callback)
-            } catch (e: Exception) {
-                // Ignore script extraction errors
-            }
-            
         } catch (e: Exception) {
             // Fallback to generic extractor
             loadExtractor(url, referer, subtitleCallback, callback)
-        }
-    }
-    
-    private suspend fun extractFromScripts(
-        document: org.jsoup.nodes.Document,
-        url: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        // Look for JSON data in scripts
-        document.select("script").forEach { script ->
-            val scriptText = script.html()
-            
-            // Look for video player configuration
-            val patterns = listOf(
-                Regex("""['"]sources['"]\s*:\s*\[(.*?)\]""", RegexOption.DOT_MATCHES_ALL),
-                Regex("""['"]file['"]\s*:\s*['"]([^'"]+)['"]"""),
-                Regex("""src\s*:\s*['"]([^'"]+)['"]""")
-            )
-            
-            for (pattern in patterns) {
-                val matches = pattern.findAll(scriptText)
-                for (match in matches) {
-                    val jsonData = match.groupValues[1]
-                    if (jsonData.contains("http")) {
-                        // Try to parse as JSON array
-                        try {
-                            val sources = app.tryParseJson<List<VideoSource>>("[$jsonData]")
-                            sources?.forEach { source ->
-                                source.file?.let { fileUrl ->
-                                    val fullUrl = fixUrl(fileUrl)
-                                    if (fullUrl.contains(".m3u8")) {
-                                        M3u8Helper.generateM3u8(
-                                            source = name,
-                                            streamUrl = fullUrl,
-                                            referer = mainUrl
-                                        ).forEach(callback)
-                                    } else {
-                                        callback.invoke(
-                                            newExtractorLink(
-                                                source = name,
-                                                name = "جودة ${source.label ?: "مجهولة"}",
-                                                url = fullUrl
-                                            ) {
-                                                this.referer = mainUrl
-                                                this.quality = source.type?.let { getQualityFromType(it) } ?: 0
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {
-                            // If not JSON array, try as single URL
-                            val videoUrl = match.groupValues[1].takeIf { it.isNotBlank() }
-                            if (videoUrl != null) {
-                                val fullUrl = fixUrl(videoUrl)
-                                if (fullUrl.contains(".m3u8")) {
-                                    M3u8Helper.generateM3u8(
-                                        source = name,
-                                        streamUrl = fullUrl,
-                                        referer = mainUrl
-                                    ).forEach(callback)
-                                } else {
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            source = name,
-                                            name = "فيديو",
-                                            url = fullUrl
-                                        ) {
-                                            this.referer = mainUrl
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    private fun getQualityFromType(type: String): Int {
-        return when {
-            type.contains("1080") -> Qualities.P1080.value
-            type.contains("720") -> Qualities.P720.value
-            type.contains("480") -> Qualities.P480.value
-            type.contains("360") -> Qualities.P360.value
-            else -> Qualities.Unknown.value
         }
     }
     
@@ -172,10 +76,4 @@ class AnimeSlayerExtractor : ExtractorApi() {
             else -> url
         }
     }
-    
-    data class VideoSource(
-        @JsonProperty("file") val file: String? = null,
-        @JsonProperty("label") val label: String? = null,
-        @JsonProperty("type") val type: String? = null
-    )
 }
