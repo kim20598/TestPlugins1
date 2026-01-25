@@ -1,5 +1,3 @@
-@file:Suppress("DEPRECATION")
-
 package com.animeslayer
 
 import com.lagradost.cloudstream3.*
@@ -165,13 +163,13 @@ class AnimeSlayer : MainAPI() {
                             serverType.contains("vanfem") -> {
                                 val vanfemUrl = "https://vanfem.com/e/$dataValue"
                                 callback.invoke(
-                                    ExtractorLink(
-                                        this.name,
-                                        serverName,
-                                        vanfemUrl,
-                                        this.mainUrl,
-                                        quality,
-                                        false
+                                    newExtractorLink(
+                                        source = this.name,
+                                        name = serverName,
+                                        url = vanfemUrl,
+                                        referer = this.mainUrl,
+                                        quality = quality,
+                                        isM3u8 = false
                                     )
                                 )
                                 return true
@@ -179,13 +177,13 @@ class AnimeSlayer : MainAPI() {
                             serverType.contains("mega") -> {
                                 val megaUrl = "https://mega.nz/file/$dataValue"
                                 callback.invoke(
-                                    ExtractorLink(
-                                        this.name,
-                                        serverName,
-                                        megaUrl,
-                                        this.mainUrl,
-                                        quality,
-                                        false
+                                    newExtractorLink(
+                                        source = this.name,
+                                        name = serverName,
+                                        url = megaUrl,
+                                        referer = this.mainUrl,
+                                        quality = quality,
+                                        isM3u8 = false
                                     )
                                 )
                                 return true
@@ -193,13 +191,13 @@ class AnimeSlayer : MainAPI() {
                             serverType.contains("drive") -> {
                                 val driveUrl = "https://drive.google.com/file/d/$dataValue/view"
                                 callback.invoke(
-                                    ExtractorLink(
-                                        this.name,
-                                        serverName,
-                                        driveUrl,
-                                        this.mainUrl,
-                                        quality,
-                                        false
+                                    newExtractorLink(
+                                        source = this.name,
+                                        name = serverName,
+                                        url = driveUrl,
+                                        referer = this.mainUrl,
+                                        quality = quality,
+                                        isM3u8 = false
                                     )
                                 )
                                 return true
