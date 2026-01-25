@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package com.animeslayer
 
 import com.lagradost.cloudstream3.*
@@ -128,7 +130,6 @@ class AnimeSlayer : MainAPI() {
         }
     }
 
-    @Suppress("DEPRECATION")
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
