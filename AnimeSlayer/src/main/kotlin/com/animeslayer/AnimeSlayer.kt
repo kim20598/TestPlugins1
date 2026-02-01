@@ -34,11 +34,10 @@ class AnimeSlayer : MainAPI() {
         
         // Get type from the div
         val type = when {
-            this.selectFirst(".typez.TV") != null -> TvType.Anime
             this.selectFirst(".typez.Movie") != null -> TvType.AnimeMovie
             this.selectFirst(".typez.OVA") != null -> TvType.OVA
             this.selectFirst(".typez.ONA") != null -> TvType.Anime
-            else -> TvType.Anime
+            else -> TvType.Anime  // TV, special, etc.
         }
         
         return newAnimeSearchResponse(title, fixUrl(href)) {
@@ -88,70 +87,84 @@ class AnimeSlayer : MainAPI() {
         val plot = doc.selectFirst(".desc, .entry-content")?.text()?.trim()
             ?: doc.selectFirst("meta[name=description]")?.attr("content")?.trim()
         
-        // Check if it's a movie or series
-        val isMovie = doc.selectFirst("span:contains(النوع:)")?.text()?.contains("فيلم") == true
-            || doc.selectFirst(".typez.Movie") != null
-            || doc.selectFirst("b:contains(النوع:)")?.nextElementSibling()?.text()?.contains("فيلم") == true
+        // BETTER DETECTION: Check multiple indicators for movie vs series
+        val isMovie = when {
+            // 1. Check type badge on the page
+            doc.selectFirst(".typez.Movie") != null -> true
+            
+            // 2. Check in the info section
+            doc.selectFirst("span:contains(النوع:)")?.text()?.contains("فيلم") == true -> true
+            doc.selectFirst("b:contains(النوع:)")?.nextElementSibling()?.text()?.contains("فيلم") == true -> true
+            
+            // 3. Check episode list - if no episodes or only 1 episode, might be a movie
+            else -> {
+                val episodeCount = getEpisodeCount(doc)
+                episodeCount == 1 || episodeCount == 0
+            }
+        }
         
         // Extract episodes from the noscript element (more reliable)
         val episodes = mutableListOf<Episode>()
         
-        // First check in the noscript element
-        val noscriptElement = doc.selectFirst("noscript#diplayer")
-        if (noscriptElement != null) {
-            val noscriptHtml = noscriptElement.html()
-            val noscriptDoc = org.jsoup.Jsoup.parse(noscriptHtml)
-            
-            val episodeElements = noscriptDoc.select("#EpList1 .CSB")
-            if (episodeElements.isNotEmpty() && !isMovie) {
-                episodeElements.forEachIndexed { index, element ->
-                    val episodeNum = index + 1
-                    val episodeName = element.text().trim()
-                    
-                    episodes.add(
-                        newEpisode("$url?ep=$episodeNum") {
-                            this.name = episodeName
-                            this.episode = episodeNum
-                            this.season = 1
-                        }
-                    )
+        // Only extract episodes if it's NOT a movie
+        if (!isMovie) {
+            // First check in the noscript element
+            val noscriptElement = doc.selectFirst("noscript#diplayer")
+            if (noscriptElement != null) {
+                val noscriptHtml = noscriptElement.html()
+                val noscriptDoc = org.jsoup.Jsoup.parse(noscriptHtml)
+                
+                val episodeElements = noscriptDoc.select("#EpList1 .CSB")
+                if (episodeElements.isNotEmpty()) {
+                    episodeElements.forEachIndexed { index, element ->
+                        val episodeNum = index + 1
+                        val episodeName = element.text().trim()
+                        
+                        episodes.add(
+                            newEpisode("$url?ep=$episodeNum") {
+                                this.name = episodeName
+                                this.episode = episodeNum
+                                this.season = 1
+                            }
+                        )
+                    }
                 }
             }
-        }
-        
-        // If no episodes found in noscript, try regular way
-        if (episodes.isEmpty()) {
-            val episodeElements = doc.select("#EpList1 .CSB")
-            if (episodeElements.isNotEmpty() && !isMovie) {
-                episodeElements.forEachIndexed { index, element ->
-                    val episodeNum = index + 1
-                    val episodeName = element.text().trim()
-                    
-                    episodes.add(
-                        newEpisode("$url?ep=$episodeNum") {
-                            this.name = episodeName
-                            this.episode = episodeNum
-                            this.season = 1
-                        }
-                    )
-                }
-            } else {
-                // Check episode count from the eplister section
-                val eplisterItems = doc.select(".eplister ul li")
-                if (eplisterItems.isNotEmpty() && !isMovie) {
-                    eplisterItems.forEach { item ->
-                        val episodeNumText = item.selectFirst(".eph-num")?.text()?.trim()
-                        val episodeNum = episodeNumText?.filter { it.isDigit() }?.toIntOrNull()
-                        val episodeTitle = item.selectFirst(".eph-title")?.text()?.trim()
+            
+            // If no episodes found in noscript, try regular way
+            if (episodes.isEmpty()) {
+                val episodeElements = doc.select("#EpList1 .CSB")
+                if (episodeElements.isNotEmpty()) {
+                    episodeElements.forEachIndexed { index, element ->
+                        val episodeNum = index + 1
+                        val episodeName = element.text().trim()
                         
-                        if (episodeNum != null) {
-                            episodes.add(
-                                newEpisode("$url?ep=$episodeNum") {
-                                    this.name = episodeTitle ?: "الحلقة $episodeNum"
-                                    this.episode = episodeNum
-                                    this.season = 1
-                                }
-                            )
+                        episodes.add(
+                            newEpisode("$url?ep=$episodeNum") {
+                                this.name = episodeName
+                                this.episode = episodeNum
+                                this.season = 1
+                            }
+                        )
+                    }
+                } else {
+                    // Check episode count from the eplister section
+                    val eplisterItems = doc.select(".eplister ul li")
+                    if (eplisterItems.isNotEmpty()) {
+                        eplisterItems.forEach { item ->
+                            val episodeNumText = item.selectFirst(".eph-num")?.text()?.trim()
+                            val episodeNum = episodeNumText?.filter { it.isDigit() }?.toIntOrNull()
+                            val episodeTitle = item.selectFirst(".eph-title")?.text()?.trim()
+                            
+                            if (episodeNum != null) {
+                                episodes.add(
+                                    newEpisode("$url?ep=$episodeNum") {
+                                        this.name = episodeTitle ?: "الحلقة $episodeNum"
+                                        this.episode = episodeNum
+                                        this.season = 1
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -355,6 +368,39 @@ class AnimeSlayer : MainAPI() {
             e.printStackTrace()
             false
         }
+    }
+    
+    // Helper function to get episode count from various sources
+    private fun getEpisodeCount(doc: org.jsoup.nodes.Document): Int {
+        // 1. Check noscript element first
+        val noscriptElement = doc.selectFirst("noscript#diplayer")
+        if (noscriptElement != null) {
+            val noscriptHtml = noscriptElement.html()
+            val noscriptDoc = org.jsoup.Jsoup.parse(noscriptHtml)
+            val episodeElements = noscriptDoc.select("#EpList1 .CSB")
+            if (episodeElements.isNotEmpty()) {
+                return episodeElements.size
+            }
+        }
+        
+        // 2. Check regular page
+        val episodeElements = doc.select("#EpList1 .CSB")
+        if (episodeElements.isNotEmpty()) {
+            return episodeElements.size
+        }
+        
+        // 3. Check eplister section
+        val eplisterItems = doc.select(".eplister ul li")
+        if (eplisterItems.isNotEmpty()) {
+            return eplisterItems.size
+        }
+        
+        // 4. Check info section for episode count
+        val episodeInfo = doc.select("span:contains(الحلقات:), b:contains(الحلقات:)").firstOrNull()
+        val epCountText = episodeInfo?.text() ?: ""
+        val epCount = Regex("""\d+""").find(epCountText)?.value?.toIntOrNull()
+        
+        return epCount ?: 0
     }
     
     private fun fixUrl(url: String): String {
