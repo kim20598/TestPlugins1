@@ -309,28 +309,30 @@ class AnimeSlayer : MainAPI() {
                             href.contains("mega.nz") -> {
                                 // Mega.nz direct link
                                 callback.invoke(
-                                    ExtractorLink(
-                                        name,
-                                        serverName,
+                                    newExtractorLink(
                                         href,
+                                        serverName,
                                         "$mainUrl/",
                                         quality,
                                         false
-                                    )
+                                    ) {
+                                        this.name = this@AnimeSlayer.name
+                                    }
                                 )
                                 foundLinks = true
                             }
                             href.contains("drive.google.com") -> {
                                 // Google Drive direct link
                                 callback.invoke(
-                                    ExtractorLink(
-                                        name,
-                                        serverName,
+                                    newExtractorLink(
                                         href,
+                                        serverName,
                                         "$mainUrl/",
                                         quality,
                                         false
-                                    )
+                                    ) {
+                                        this.name = this@AnimeSlayer.name
+                                    }
                                 )
                                 foundLinks = true
                             }
