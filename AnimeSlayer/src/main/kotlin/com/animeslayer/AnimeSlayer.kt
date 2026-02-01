@@ -291,15 +291,6 @@ class AnimeSlayer : MainAPI() {
                             }
                             
                             if (extractedUrl != null) {
-                                // Get server name for label
-                                val serverName = server.text().trim()
-                                val linkQuality = when (quality) {
-                                    "FHD" -> Qualities.FullHDP.value
-                                    "HD" -> Qualities.HD.value
-                                    "SD" -> Qualities.SD.value
-                                    else -> Qualities.Unknown.value
-                                }
-                                
                                 // Try to load extractor
                                 if (loadExtractor(extractedUrl, "$mainUrl/", subtitleCallback, callback)) {
                                     foundAnyLink = true
