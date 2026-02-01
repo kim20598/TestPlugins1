@@ -23,14 +23,16 @@ class AnimeSlayer : MainAPI() {
         "$mainUrl/anime/?status=completed" to "الأنمي المكتمل"
     )
 
+    // Parse anime cards
     private fun Element.toSearchResult(): SearchResponse? {
-        val href = this.selectFirst("a[href]")?.attr("href")?.trim() ?: return null
+        val href = this.selectFirst("a")?.attr("href") ?: return null
         val title = this.selectFirst(".tt h2, .tt, h2")?.text()?.trim() 
             ?: this.selectFirst("img")?.attr("alt")?.trim()
             ?: return null
-        
+            
         val poster = this.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
         
+        // Get type from the div
         val typeClass = this.selectFirst(".typez")?.text()?.lowercase() 
             ?: this.selectFirst(".typez")?.attr("class")?.lowercase()
         
@@ -69,34 +71,42 @@ class AnimeSlayer : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url).document
         
+        // Title
         val title = doc.selectFirst("h1.entry-title")?.text()?.trim()
             ?: doc.selectFirst("meta[property=og:title]")?.attr("content")?.trim()
             ?: "Unknown"
         
+        // Remove suffix from title
         val cleanTitle = title.replace(" - Anime Slayer Web | موقع انمي سلاير ويب", "")
             .replace("Anime Slayer Web | موقع انمي سلاير ويب", "")
             .trim()
         
+        // Poster
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")?.let { fixUrl(it) }
             ?: doc.selectFirst(".thumb img, .thumbook img")?.attr("src")?.let { fixUrl(it) }
         
+        // Plot
         val plot = doc.selectFirst(".desc, .entry-content")?.text()?.trim()
             ?: doc.selectFirst("meta[name=description]")?.attr("content")?.trim()
         
-        val typeText = doc.selectFirst(".typez")?.text()?.lowercase()
+        // Check if it's a movie
+        val typeClass = doc.selectFirst(".typez")?.text()?.lowercase() 
             ?: doc.selectFirst(".typez")?.attr("class")?.lowercase()
         
         val isMovie = when {
-            typeText?.contains("movie") == true -> true
+            typeClass?.contains("movie") == true -> true
             else -> {
                 val episodeCount = getEpisodeCount(doc)
                 episodeCount == 1 || episodeCount == 0
             }
         }
         
+        // Extract episodes from the noscript element
         val episodes = mutableListOf<Episode>()
         
+        // Only extract episodes if it's NOT a movie
         if (!isMovie) {
+            // First check in the noscript element
             val noscriptElement = doc.selectFirst("noscript#diplayer")
             if (noscriptElement != null) {
                 val noscriptHtml = noscriptElement.html()
@@ -119,6 +129,7 @@ class AnimeSlayer : MainAPI() {
                 }
             }
             
+            // If no episodes found in noscript, try regular way
             if (episodes.isEmpty()) {
                 val episodeElements = doc.select("#EpList1 .CSB")
                 if (episodeElements.isNotEmpty()) {
@@ -135,6 +146,7 @@ class AnimeSlayer : MainAPI() {
                         )
                     }
                 } else {
+                    // Check episode count from the eplister section
                     val eplisterItems = doc.select(".eplister ul li")
                     if (eplisterItems.isNotEmpty()) {
                         eplisterItems.forEach { item ->
@@ -157,13 +169,17 @@ class AnimeSlayer : MainAPI() {
             }
         }
         
+        // Sort episodes by number
         episodes.sortBy { it.episode }
         
+        // Get year
         val year = doc.selectFirst("span.split:contains(تم الإصدار:)")?.text()
             ?.filter { it.isDigit() }?.take(4)?.toIntOrNull()
         
+        // Get tags
         val tags = doc.select(".genxed a").map { it.text().trim() }
         
+        // Return appropriate response
         return if (isMovie || episodes.isEmpty()) {
             newMovieLoadResponse(cleanTitle, url, TvType.AnimeMovie, url) {
                 this.posterUrl = poster
@@ -194,12 +210,109 @@ class AnimeSlayer : MainAPI() {
             val doc = app.get(url).document
             var foundAnyLink = false
             
+            // 1. First try to get links from the noscript element
             val noscriptElement = doc.selectFirst("noscript#diplayer")
             if (noscriptElement != null) {
                 val noscriptHtml = noscriptElement.html()
                 val noscriptDoc = org.jsoup.Jsoup.parse(noscriptHtml)
                 
+                // Get all divv11 containers (each contains servers for one episode)
                 val serverContainers = noscriptDoc.select(".divv11")
+                if (serverContainers.isNotEmpty() && serverContainers.size >= episode) {
+                    val container = serverContainers[episode - 1]
+                    val servers = container.select(".ul-server-position1 li")
+                    
+                    // Try each server in order
+                    servers.forEach { server ->
+                        val dataValue = server.attr("data")?.trim()
+                        val serverType = server.attr("type")?.lowercase() ?: server.attr("class")?.lowercase() ?: ""
+                        val quality = server.attr("quality-data") ?: "HD"
+                        
+                        if (!dataValue.isNullOrBlank()) {
+                            val extractedUrl = when {
+                                serverType.contains("yourupload") -> {
+                                    // YourUpload links
+                                    "https://www.yourupload.com/embed/$dataValue"
+                                }
+                                serverType.contains("ok") -> {
+                                    // OK.ru links
+                                    if (dataValue.matches(Regex("\\d+"))) {
+                                        "https://ok.ru/video/$dataValue"
+                                    } else {
+                                        null
+                                    }
+                                }
+                                serverType.contains("mega") -> {
+                                    // Mega.nz links
+                                    if (dataValue.contains("#")) {
+                                        val parts = dataValue.split("#")
+                                        if (parts.size >= 2) {
+                                            "https://mega.nz/file/${parts[0]}#${parts[1]}"
+                                        } else {
+                                            "https://mega.nz/file/$dataValue"
+                                        }
+                                    } else {
+                                        "https://mega.nz/file/$dataValue"
+                                    }
+                                }
+                                serverType.contains("videa") -> {
+                                    // Videa links
+                                    "https://videa.hu/player?v=$dataValue"
+                                }
+                                serverType.contains("mailru") -> {
+                                    // Mail.ru links
+                                    "https://my.mail.ru/video/embed/$dataValue"
+                                }
+                                serverType.contains("mp4upload") -> {
+                                    // MP4Upload links
+                                    "https://mp4upload.com/embed-$dataValue.html"
+                                }
+                                serverType.contains("uqload") -> {
+                                    // UQLoad links
+                                    "https://uqload.com/embed-$dataValue.html"
+                                }
+                                serverType.contains("dailymotion") -> {
+                                    // Dailymotion links
+                                    "https://www.dailymotion.com/embed/video/$dataValue"
+                                }
+                                serverType.contains("4shared") -> {
+                                    // 4shared links
+                                    "https://www.4shared.com/video/$dataValue"
+                                }
+                                serverType.contains("asnwish") -> {
+                                    // ASNWISH links
+                                    "https://asnwish.com/e/$dataValue"
+                                }
+                                serverType.contains("drive") -> {
+                                    // Google Drive links
+                                    "https://drive.google.com/file/d/$dataValue/preview"
+                                }
+                                else -> null
+                            }
+                            
+                            if (extractedUrl != null) {
+                                // Get server name for label
+                                val serverName = server.text().trim()
+                                val linkQuality = when (quality) {
+                                    "FHD" -> Qualities.FullHDP.value
+                                    "HD" -> Qualities.HD.value
+                                    "SD" -> Qualities.SD.value
+                                    else -> Qualities.Unknown.value
+                                }
+                                
+                                // Try to load extractor
+                                if (loadExtractor(extractedUrl, "$mainUrl/", subtitleCallback, callback)) {
+                                    foundAnyLink = true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // 2. Also check the regular page if noscript didn't work
+            if (!foundAnyLink) {
+                val serverContainers = doc.select(".divv11")
                 if (serverContainers.isNotEmpty() && serverContainers.size >= episode) {
                     val container = serverContainers[episode - 1]
                     val servers = container.select(".ul-server-position1 li")
@@ -210,6 +323,9 @@ class AnimeSlayer : MainAPI() {
                         
                         if (!dataValue.isNullOrBlank()) {
                             val extractedUrl = when {
+                                serverType.contains("yourupload") -> {
+                                    "https://www.yourupload.com/embed/$dataValue"
+                                }
                                 serverType.contains("ok") -> {
                                     if (dataValue.matches(Regex("\\d+"))) {
                                         "https://ok.ru/video/$dataValue"
@@ -224,25 +340,19 @@ class AnimeSlayer : MainAPI() {
                                             "https://mega.nz/file/${parts[0]}#${parts[1]}"
                                         } else {
                                             "https://mega.nz/file/$dataValue"
-                                        }
+                                    }
                                     } else {
                                         "https://mega.nz/file/$dataValue"
                                     }
                                 }
                                 serverType.contains("videa") -> {
-                                    "https://videa.hu/videok/$dataValue"
+                                    "https://videa.hu/player?v=$dataValue"
                                 }
-                                serverType.contains("mp4upload") -> {
-                                    "https://mp4upload.com/embed-$dataValue.html"
-                                }
-                                serverType.contains("uqload") -> {
-                                    "https://uqload.com/embed-$dataValue.html"
-                                }
-                                serverType.contains("dailymotion") -> {
-                                    "https://www.dailymotion.com/embed/video/$dataValue"
+                                serverType.contains("mailru") -> {
+                                    "https://my.mail.ru/video/embed/$dataValue"
                                 }
                                 serverType.contains("drive") -> {
-                                    "https://drive.google.com/file/d/$dataValue/view"
+                                    "https://drive.google.com/file/d/$dataValue/preview"
                                 }
                                 else -> null
                             }
@@ -257,6 +367,7 @@ class AnimeSlayer : MainAPI() {
                 }
             }
             
+            // 3. Also check the direct download section
             val downloadLinks = doc.select(".linkul li a")
             downloadLinks.forEach { linkElement ->
                 val href = linkElement.attr("href")?.trim()
@@ -267,6 +378,7 @@ class AnimeSlayer : MainAPI() {
                 }
             }
             
+            // Return true if we found ANY links at all
             foundAnyLink
         } catch (e: Exception) {
             e.printStackTrace()
@@ -274,7 +386,9 @@ class AnimeSlayer : MainAPI() {
         }
     }
     
+    // Helper function to get episode count from various sources
     private fun getEpisodeCount(doc: org.jsoup.nodes.Document): Int {
+        // 1. Check noscript element first
         val noscriptElement = doc.selectFirst("noscript#diplayer")
         if (noscriptElement != null) {
             val noscriptHtml = noscriptElement.html()
@@ -285,11 +399,13 @@ class AnimeSlayer : MainAPI() {
             }
         }
         
+        // 2. Check regular page
         val episodeElements = doc.select("#EpList1 .CSB")
         if (episodeElements.isNotEmpty()) {
             return episodeElements.size
         }
         
+        // 3. Check eplister section
         val eplisterItems = doc.select(".eplister ul li")
         if (eplisterItems.isNotEmpty()) {
             return eplisterItems.size
