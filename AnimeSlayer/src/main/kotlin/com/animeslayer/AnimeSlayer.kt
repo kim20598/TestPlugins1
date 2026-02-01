@@ -13,11 +13,12 @@ class AnimeSlayer : MainAPI() {
     override val supportedTypes = setOf(
         TvType.Anime,
         TvType.AnimeMovie,
-        TvType.OVA
+        TvType.OVA,
+        TvType.ONA
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/" to "أحدث الحلقات",
+        "$mainUrl/animeslayer/" to "الصفحة الرئيسية",
         "$mainUrl/anime/?status=ongoing" to "الأنمي المستمر",
         "$mainUrl/anime/?status=completed&order=rating" to "الأعلى تقييماً",
         "$mainUrl/anime/?status=completed" to "الأنمي المكتمل"
@@ -32,8 +33,18 @@ class AnimeSlayer : MainAPI() {
             
         val poster = this.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
         
+        // Get type from the div
+        val type = when {
+            this.selectFirst(".typez.TV") != null -> TvType.Anime
+            this.selectFirst(".typez.Movie") != null -> TvType.AnimeMovie
+            this.selectFirst(".typez.OVA") != null -> TvType.OVA
+            this.selectFirst(".typez.ONA") != null -> TvType.ONA
+            else -> TvType.Anime
+        }
+        
         return newAnimeSearchResponse(title, fixUrl(href)) {
             this.posterUrl = poster
+            this.type = type
         }
     }
 
@@ -44,7 +55,7 @@ class AnimeSlayer : MainAPI() {
         val url = if (page == 1) request.data else "${request.data}page/$page/"
         val doc = app.get(url).document
         
-        val items = doc.select("article.bs, .bsx").mapNotNull { it.toSearchResult() }
+        val items = doc.select("article.bs, .bsx, .listupd article").mapNotNull { it.toSearchResult() }
         
         return newHomePageResponse(request.name, items, items.isNotEmpty())
     }
@@ -65,6 +76,11 @@ class AnimeSlayer : MainAPI() {
             ?: doc.selectFirst("meta[property=og:title]")?.attr("content")?.trim()
             ?: "Unknown"
         
+        // Remove suffix from title
+        val cleanTitle = title.replace(" - Anime Slayer Web | موقع انمي سلاير ويب", "")
+            .replace("Anime Slayer Web | موقع انمي سلاير ويب", "")
+            .trim()
+        
         // Poster
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")?.let { fixUrl(it) }
             ?: doc.selectFirst(".thumb img, .thumbook img")?.attr("src")?.let { fixUrl(it) }
@@ -76,6 +92,7 @@ class AnimeSlayer : MainAPI() {
         // Check if it's a movie or series
         val isMovie = doc.selectFirst("span:contains(النوع:)")?.text()?.contains("فيلم") == true
             || doc.selectFirst(".typez.Movie") != null
+            || doc.selectFirst("b:contains(النوع:)")?.nextElementSibling()?.text()?.contains("فيلم") == true
         
         // Extract episodes from the noscript element (more reliable)
         val episodes = mutableListOf<Episode>()
@@ -120,36 +137,44 @@ class AnimeSlayer : MainAPI() {
                     )
                 }
             } else {
-                // Try to get episode count from info
-                val episodeInfo = doc.select("span:contains(الحلقات:)").firstOrNull()
-                val epCount = episodeInfo?.text()?.let {
-                    Regex("""\d+""").find(it)?.value?.toIntOrNull()
-                }
-                
-                if (epCount != null && epCount > 0 && !isMovie) {
-                    for (i in 1..epCount) {
-                        episodes.add(
-                            newEpisode("$url?ep=$i") {
-                                this.name = "الحلقة $i"
-                                this.episode = i
-                                this.season = 1
-                            }
-                        )
+                // Check episode count from the eplister section
+                val eplisterItems = doc.select(".eplister ul li")
+                if (eplisterItems.isNotEmpty() && !isMovie) {
+                    eplisterItems.forEach { item ->
+                        val episodeNumText = item.selectFirst(".eph-num")?.text()?.trim()
+                        val episodeNum = episodeNumText?.filter { it.isDigit() }?.toIntOrNull()
+                        val episodeTitle = item.selectFirst(".eph-title")?.text()?.trim()
+                        
+                        if (episodeNum != null) {
+                            episodes.add(
+                                newEpisode("$url?ep=$episodeNum") {
+                                    this.name = episodeTitle ?: "الحلقة $episodeNum"
+                                    this.episode = episodeNum
+                                    this.season = 1
+                                }
+                            )
+                        }
                     }
                 }
             }
         }
         
+        // Sort episodes by number
+        episodes.sortBy { it.episode }
+        
         // Return appropriate response
         return if (isMovie || episodes.isEmpty()) {
-            newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
+            newMovieLoadResponse(cleanTitle, url, TvType.AnimeMovie, url) {
                 this.posterUrl = poster
                 this.plot = plot
+                this.year = doc.selectFirst("span.split:contains(تم الإصدار:)")?.text()?.filter { it.isDigit() }?.take(4)?.toIntOrNull()
             }
         } else {
-            newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
+            newTvSeriesLoadResponse(cleanTitle, url, TvType.Anime, episodes) {
                 this.posterUrl = poster
                 this.plot = plot
+                this.year = doc.selectFirst("span.split:contains(تم الإصدار:)")?.text()?.filter { it.isDigit() }?.take(4)?.toIntOrNull()
+                this.tags = doc.select(".genxed a").map { it.text().trim() }
             }
         }
     }
@@ -181,34 +206,74 @@ class AnimeSlayer : MainAPI() {
                     
                     // Try each server in order
                     servers.forEach { server ->
-                        val dataValue = server.attr("data-url").ifBlank { server.attr("data") }
-                        if (dataValue.isNotBlank()) {
-                            val serverType = server.attr("type")?.lowercase() ?: server.attr("class")?.lowercase() ?: ""
-                            
+                        val dataValue = server.attr("data")?.trim()
+                        val serverType = server.attr("type")?.lowercase() ?: server.attr("class")?.lowercase() ?: ""
+                        val quality = server.attr("quality-data") ?: "HD"
+                        
+                        if (!dataValue.isNullOrBlank()) {
                             val extractedUrl = when {
-                                serverType.contains("vanfem") -> {
-                                    // VanFem links
-                                    "https://vanfem.com/e/$dataValue"
+                                serverType.contains("ok") -> {
+                                    // OK.ru links
+                                    if (dataValue.matches(Regex("\\d+"))) {
+                                        "https://ok.ru/video/$dataValue"
+                                    } else {
+                                        null
+                                    }
                                 }
                                 serverType.contains("mega") -> {
                                     // Mega.nz links
-                                    if (dataValue.startsWith(":/")) {
-                                        "https://mega.nz$dataValue"
-                                    } else if (dataValue.contains("#")) {
-                                        "https://mega.nz/file/$dataValue"
+                                    if (dataValue.contains("#")) {
+                                        val parts = dataValue.split("#")
+                                        if (parts.size >= 2) {
+                                            "https://mega.nz/file/${parts[0]}#${parts[1]}"
+                                        } else {
+                                            "https://mega.nz/file/$dataValue"
+                                        }
                                     } else {
-                                        "https://mega.nz/file/${dataValue}#${dataValue.substringAfterLast('/')}"
+                                        "https://mega.nz/file/$dataValue"
                                     }
                                 }
-                                serverType.contains("drive") -> {
-                                    // Google Drive links
-                                    "https://drive.google.com/file/d/$dataValue/view"
+                                serverType.contains("videa") -> {
+                                    // Videa links
+                                    "https://videa.hu/videok/$dataValue"
+                                }
+                                serverType.contains("mp4upload") -> {
+                                    // MP4Upload links
+                                    "https://mp4upload.com/embed-$dataValue.html"
+                                }
+                                serverType.contains("uqload") -> {
+                                    // UQLoad links
+                                    "https://uqload.com/embed-$dataValue.html"
+                                }
+                                serverType.contains("dailymotion") -> {
+                                    // Dailymotion links
+                                    "https://www.dailymotion.com/embed/video/$dataValue"
+                                }
+                                serverType.contains("4shared") -> {
+                                    // 4shared links
+                                    "https://www.4shared.com/video/$dataValue"
+                                }
+                                serverType.contains("asnwish") -> {
+                                    // ASNWISH links
+                                    "https://asnwish.com/e/$dataValue"
                                 }
                                 else -> null
                             }
                             
                             if (extractedUrl != null) {
-                                if (loadExtractor(extractedUrl, mainUrl, subtitleCallback, callback)) {
+                                // Create quality label
+                                val qualityLabel = when (quality) {
+                                    "FHD" -> Qualities.FullHDP.value
+                                    "HD" -> Qualities.HDP.value
+                                    "SD" -> Qualities.SD.value
+                                    "LD" -> Qualities.LD.value
+                                    else -> Qualities.HDP.value
+                                }
+                                
+                                // Get server name for label
+                                val serverName = server.text().trim()
+                                
+                                if (loadExtractor(extractedUrl, "$mainUrl/", subtitleCallback, callback)) {
                                     return true
                                 }
                             }
@@ -224,34 +289,42 @@ class AnimeSlayer : MainAPI() {
                 val servers = container.select(".ul-server-position1 li")
                 
                 servers.forEach { server ->
-                    val dataValue = server.attr("data-url").ifBlank { server.attr("data") }
-                    if (dataValue.isNotBlank()) {
-                        val serverType = server.attr("type")?.lowercase() ?: server.attr("class")?.lowercase() ?: ""
-                        
-                        when {
-                            serverType.contains("vanfem") -> {
-                                val vanfemUrl = "https://vanfem.com/e/$dataValue"
-                                if (loadExtractor(vanfemUrl, mainUrl, subtitleCallback, callback)) {
-                                    return true
+                    val dataValue = server.attr("data")?.trim()
+                    val serverType = server.attr("type")?.lowercase() ?: server.attr("class")?.lowercase() ?: ""
+                    
+                    if (!dataValue.isNullOrBlank()) {
+                        val extractedUrl = when {
+                            serverType.contains("ok") -> {
+                                if (dataValue.matches(Regex("\\d+"))) {
+                                    "https://ok.ru/video/$dataValue"
+                                } else {
+                                    null
                                 }
                             }
                             serverType.contains("mega") -> {
-                                val megaUrl = if (dataValue.startsWith(":/")) {
-                                    "https://mega.nz$dataValue"
-                                } else if (dataValue.contains("#")) {
-                                    "https://mega.nz/file/$dataValue"
+                                if (dataValue.contains("#")) {
+                                    val parts = dataValue.split("#")
+                                    if (parts.size >= 2) {
+                                        "https://mega.nz/file/${parts[0]}#${parts[1]}"
+                                    } else {
+                                        "https://mega.nz/file/$dataValue"
+                                    }
                                 } else {
-                                    "https://mega.nz/file/${dataValue}#${dataValue.substringAfterLast('/')}"
-                                }
-                                if (loadExtractor(megaUrl, mainUrl, subtitleCallback, callback)) {
-                                    return true
+                                    "https://mega.nz/file/$dataValue"
                                 }
                             }
-                            serverType.contains("drive") -> {
-                                val driveUrl = "https://drive.google.com/file/d/$dataValue/view"
-                                if (loadExtractor(driveUrl, mainUrl, subtitleCallback, callback)) {
-                                    return true
-                                }
+                            serverType.contains("videa") -> {
+                                "https://videa.hu/videok/$dataValue"
+                            }
+                            serverType.contains("mp4upload") -> {
+                                "https://mp4upload.com/embed-$dataValue.html"
+                            }
+                            else -> null
+                        }
+                        
+                        if (extractedUrl != null) {
+                            if (loadExtractor(extractedUrl, "$mainUrl/", subtitleCallback, callback)) {
+                                return true
                             }
                         }
                     }
@@ -270,7 +343,8 @@ class AnimeSlayer : MainAPI() {
             url.startsWith("http") -> url
             url.startsWith("//") -> "https:$url"
             url.startsWith("/") -> "$mainUrl$url"
+            url.startsWith("?") -> "$mainUrl/$url"
             else -> "$mainUrl/$url"
-        }
+        }.replace("?resize=247,350", "") // Remove resize parameters
     }
 }
