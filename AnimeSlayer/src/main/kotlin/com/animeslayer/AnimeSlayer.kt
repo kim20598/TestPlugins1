@@ -189,9 +189,37 @@ class AnimeSlayer : MainAPI() {
             val episode = data.substringAfter("?ep=").toIntOrNull() ?: 1
             
             val doc = app.get(url).document
-            var foundLinks = false
+            var foundAnyLink = false
             
-            // First try to get links from the noscript element (the actual video links)
+            // Function to process a single link
+            fun processLink(extractedUrl: String, serverName: String, qualityStr: String = "HD"): Boolean {
+                // Convert quality string to quality value
+                val quality = when (qualityStr) {
+                    "FHD" -> "1080p"
+                    "HD" -> "720p"
+                    "SD" -> "480p"
+                    "LD" -> "360p"
+                    else -> "720p"
+                }
+                
+                // Try to load extractor
+                val success = loadExtractor(extractedUrl, "$mainUrl/", subtitleCallback) { link ->
+                    // Create a modified link with the server name and quality
+                    callback(newExtractorLink(
+                        name,
+                        "$serverName ($quality)",
+                        link.url,
+                        link.type
+                    ) {
+                        this.referer = link.referer
+                        this.quality = link.quality
+                    })
+                }
+                
+                return success
+            }
+            
+            // 1. First try to get links from the noscript element (the actual video links)
             val noscriptElement = doc.selectFirst("noscript#diplayer")
             if (noscriptElement != null) {
                 // Parse the HTML inside the noscript tag
@@ -265,21 +293,9 @@ class AnimeSlayer : MainAPI() {
                             }
                             
                             if (extractedUrl != null) {
-                                // Convert quality string to Int
-                                val quality = when (qualityStr) {
-                                    "FHD" -> Qualities.FullHDP.value
-                                    "HD" -> Qualities.HDP.value
-                                    "SD" -> Qualities.SD.value
-                                    "LD" -> Qualities.LD.value
-                                    else -> Qualities.HDP.value
-                                }
-                                
-                                // Get server name for label
                                 val serverName = server.text().trim()
-                                
-                                // Try to load extractor
-                                if (loadExtractor(extractedUrl, "$mainUrl/", subtitleCallback, callback)) {
-                                    foundLinks = true
+                                if (processLink(extractedUrl, serverName, qualityStr)) {
+                                    foundAnyLink = true
                                 }
                             }
                         }
@@ -287,53 +303,31 @@ class AnimeSlayer : MainAPI() {
                 }
             }
             
-            // Also check the direct download section (the .linkul section you showed)
-            if (!foundLinks) {
-                val downloadLinks = doc.select(".linkul li a")
-                downloadLinks.forEach { linkElement ->
-                    val href = linkElement.attr("href")?.trim()
-                    if (!href.isNullOrBlank()) {
-                        // Determine quality from class
-                        val quality = when {
-                            linkElement.parent()?.hasClass("FHD") == true -> Qualities.FullHDP.value
-                            linkElement.parent()?.hasClass("HD") == true -> Qualities.HDP.value
-                            linkElement.parent()?.hasClass("SD") == true -> Qualities.SD.value
-                            else -> Qualities.HDP.value
-                        }
-                        
-                        // Get server name from link text
-                        val serverName = linkElement.text().trim()
-                        
-                        // Direct URL - no need for extractor for Mega and Drive
-                        when {
-                            href.contains("mega.nz") || href.contains("drive.google.com") || href.contains("4shared.com") -> {
-                                // For direct download links, we can create a simple ExtractorLink
-                                callback.invoke(
-                                    newExtractorLink(
-                                        name,
-                                        serverName,
-                                        href,
-                                        ExtractorLinkType.DIRECT
-                                    ) {
-                                        this.quality = quality
-                                        this.referer = "$mainUrl/"
-                                    }
-                                )
-                                foundLinks = true
-                            }
-                            else -> {
-                                // Try with extractor for other links
-                                if (loadExtractor(href, "$mainUrl/", subtitleCallback, callback)) {
-                                    foundLinks = true
-                                }
-                            }
-                        }
+            // 2. Also check the direct download section (the .linkul section you showed)
+            val downloadLinks = doc.select(".linkul li a")
+            downloadLinks.forEach { linkElement ->
+                val href = linkElement.attr("href")?.trim()
+                if (!href.isNullOrBlank()) {
+                    // Determine quality from class
+                    val qualityStr = when {
+                        linkElement.parent()?.hasClass("FHD") == true -> "FHD"
+                        linkElement.parent()?.hasClass("HD") == true -> "HD"
+                        linkElement.parent()?.hasClass("SD") == true -> "SD"
+                        else -> "HD"
+                    }
+                    
+                    // Get server name from link text
+                    val serverName = linkElement.text().trim()
+                    
+                    // Process the link
+                    if (processLink(href, serverName, qualityStr)) {
+                        foundAnyLink = true
                     }
                 }
             }
             
-            // If still no links found, try the regular way (fallback)
-            if (!foundLinks) {
+            // 3. If still no links found, try the regular way (fallback)
+            if (!foundAnyLink) {
                 val serverContainers = doc.select(".divv11")
                 if (serverContainers.isNotEmpty() && serverContainers.size >= episode) {
                     val container = serverContainers[episode - 1]
@@ -377,8 +371,9 @@ class AnimeSlayer : MainAPI() {
                             }
                             
                             if (extractedUrl != null) {
-                                if (loadExtractor(extractedUrl, "$mainUrl/", subtitleCallback, callback)) {
-                                    foundLinks = true
+                                val serverName = server.text().trim()
+                                if (processLink(extractedUrl, serverName, "HD")) {
+                                    foundAnyLink = true
                                 }
                             }
                         }
@@ -386,7 +381,7 @@ class AnimeSlayer : MainAPI() {
                 }
             }
             
-            foundLinks
+            foundAnyLink
         } catch (e: Exception) {
             e.printStackTrace()
             false
