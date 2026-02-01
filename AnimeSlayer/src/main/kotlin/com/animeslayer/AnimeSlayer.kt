@@ -160,13 +160,15 @@ class AnimeSlayer : MainAPI() {
             allServers.addAll(extractServersFromDocument(doc, episode))
             
             // 3. Extract from download links section
-            val downloadLinks = doc.select(".linkul li a, .download-links a, a[href*='drive.google.com'], a[href*='mega.nz']")
+            val downloadLinks = doc.select(".linkul li a, .download-links a, a[href*='drive.google.com'], a[href*='mega.nz'], a[href*='4shared.com'], a[href*='vanfem']")
             downloadLinks.forEach { linkElement ->
                 val href = linkElement.attr("href")?.trim()
                 if (!href.isNullOrBlank()) {
                     val serverType = when {
                         href.contains("drive.google.com") -> "drive"
                         href.contains("mega.nz") -> "mega"
+                        href.contains("4shared.com") -> "4shared"
+                        href.contains("vanfem") -> "vanfem"
                         else -> "direct"
                     }
                     allServers.add((serverType to href))
@@ -174,7 +176,10 @@ class AnimeSlayer : MainAPI() {
             }
             
             // Debug: Print all found servers
-            println("Found ${allServers.size} servers: $allServers")
+            println("Found ${allServers.size} servers for episode $episode:")
+            allServers.forEach { (type, value) ->
+                println("  - $type: $value")
+            }
             
             // Process ALL extracted servers
             allServers.forEach { (serverType, dataValue) ->
@@ -187,6 +192,8 @@ class AnimeSlayer : MainAPI() {
                     } else {
                         println("✗ Failed to load extractor for: $serverType")
                     }
+                } else {
+                    println("⚠ Could not generate URL for: $serverType with data: $dataValue")
                 }
             }
             
@@ -202,14 +209,24 @@ class AnimeSlayer : MainAPI() {
     private fun extractServersFromDocument(doc: org.jsoup.nodes.Document, episode: Int): List<Pair<String, String>> {
         val servers = mutableListOf<Pair<String, String>>()
         
-        // Find all server containers
-        val serverContainers = doc.select(".divv11, .server-container, .divv")
+        // Find all server containers - looking for the structure in your HTML
+        val serverContainers = doc.select(".divv11, .server-container, .divv, .serversss")
         if (serverContainers.isNotEmpty()) {
             // Get the correct container for the episode
             val containerIndex = episode - 1
             if (containerIndex < serverContainers.size) {
                 val container = serverContainers[containerIndex]
-                val serverElements = container.select(".ul-server-position1 li, .server-list li, .server-item, li[data], .server-btn")
+                
+                // Look for server lists in multiple possible structures
+                val serverElements = container.select("""
+                    .ul-server-position1 li, 
+                    .server-list li, 
+                    .server-item, 
+                    li[data], 
+                    .server-btn,
+                    li[type],
+                    li[class*="server"]
+                """.trimIndent())
                 
                 serverElements.forEach { server ->
                     val dataValue = server.attr("data")?.trim()
@@ -223,6 +240,7 @@ class AnimeSlayer : MainAPI() {
                         .replace("btn", "")
                         .replace("-", "")
                         .replace("_", "")
+                        .replace(Regex("\\d+"), "") // Remove numbers
                         .trim()
                     
                     if (!dataValue.isNullOrBlank() && serverType.isNotBlank()) {
@@ -241,51 +259,67 @@ class AnimeSlayer : MainAPI() {
             // Direct URLs already
             dataValue.startsWith("http") -> dataValue
             
-            // MEGA - IMPORTANT: Check if it's a file ID or full URL
+            // VANFEM - NEW SERVER TYPE (from your HTML)
+            serverType.contains("vanfem") -> {
+                // Vanfem appears to use some encoding/obfuscation
+                // Try multiple possible formats based on the pattern
+                val vanfemUrls = listOf(
+                    "https://vanfem.com/v/$dataValue",
+                    "https://vanfem.com/embed/$dataValue",
+                    "https://vanfem.com/e/$dataValue",
+                    "https://www.vanfem.com/v/$dataValue",
+                    "https://www.vanfem.com/embed/$dataValue",
+                    "https://www.vanfem.com/e/$dataValue",
+                    "https://vanfem.net/v/$dataValue",
+                    "https://vanfem.net/embed/$dataValue"
+                )
+                vanfemUrls.firstOrNull()
+            }
+            
+            // MEGA - Based on your HTML examples
             serverType.contains("mega") -> {
-                if (dataValue.startsWith("http")) {
-                    dataValue
-                } else if (dataValue.contains("#")) {
-                    // Format: fileID#decryptionKey
+                // Format: data="fileID#decryptionKey"
+                // Example: data="AmIilJob#0kmvEEog0Ps3f259G07rSi3Dm52XRfC8l0wEdIXa9ps"
+                if (dataValue.contains("#")) {
                     val parts = dataValue.split("#")
                     if (parts.size >= 2) {
+                        // MEGA format: https://mega.nz/file/FILEID#DECRYPTIONKEY
                         "https://mega.nz/file/${parts[0]}#${parts[1]}"
                     } else {
                         "https://mega.nz/file/$dataValue"
                     }
                 } else {
-                    // Could be just the file ID, try different formats
-                    val megaUrls = listOf(
-                        "https://mega.nz/file/$dataValue",
-                        "https://mega.nz/#!$dataValue",
-                        "https://mega.nz/#!$dataValue!decryptionKey",
-                        "https://mega.nz/folder/$dataValue"
-                    )
-                    
-                    // Return the first one, CloudStream extractor will handle validation
-                    megaUrls.firstOrNull()
+                    // Fallback formats
+                    "https://mega.nz/file/$dataValue"
                 }
             }
             
-            // Google Drive - IMPORTANT: Check if it's already a full URL or just ID
+            // Google Drive - Based on your HTML examples
             serverType.contains("drive") || serverType.contains("google") -> {
-                if (dataValue.startsWith("http")) {
-                    dataValue
-                } else if (dataValue.contains("/d/")) {
-                    // Contains Google Drive URL pattern
-                    "https://drive.google.com$dataValue"
-                } else {
-                    // Assume it's a file ID
-                    val driveUrls = listOf(
-                        "https://drive.google.com/file/d/$dataValue/view",
-                        "https://drive.google.com/file/d/$dataValue/preview",
-                        "https://drive.google.com/uc?id=$dataValue",
-                        "https://drive.google.com/open?id=$dataValue"
-                    )
-                    
-                    // Try different Google Drive URL formats
-                    driveUrls.firstOrNull()
-                }
+                // Format: data="fileID"
+                // Example: data="1NEDOOaVsjtGa003IUQdMeey0Mx0MeMJy"
+                // Google Drive URL formats:
+                val driveUrls = listOf(
+                    "https://drive.google.com/file/d/$dataValue/view",
+                    "https://drive.google.com/file/d/$dataValue/preview",
+                    "https://drive.google.com/uc?id=$dataValue&export=download",
+                    "https://drive.google.com/uc?id=$dataValue"
+                )
+                driveUrls.firstOrNull()
+            }
+            
+            // 4shared - Based on your HTML examples
+            serverType.contains("4shared") -> {
+                // Format: data="shortCode"
+                // Example: data="fcGu1q5viq"
+                // 4shared URL formats:
+                val sharedUrls = listOf(
+                    "https://www.4shared.com/video/$dataValue",
+                    "https://4shared.com/video/$dataValue",
+                    "https://www.4shared.com/get/$dataValue",
+                    "https://4shared.com/get/$dataValue"
+                )
+                sharedUrls.firstOrNull()
             }
             
             // YOURUPLOAD
@@ -298,17 +332,12 @@ class AnimeSlayer : MainAPI() {
             
             // VIDEA
             serverType.contains("videa") -> {
-                if (dataValue.startsWith("http")) {
-                    dataValue
-                } else {
-                    // Try multiple Videa URL formats
-                    val videaUrls = listOf(
-                        "https://videa.hu/player?v=$dataValue",
-                        "https://videa.hu/videok/$dataValue",
-                        "https://videa.hu/v/$dataValue"
-                    )
-                    videaUrls.firstOrNull()
-                }
+                val videaUrls = listOf(
+                    "https://videa.hu/player?v=$dataValue",
+                    "https://videa.hu/videok/$dataValue",
+                    "https://videa.hu/v/$dataValue"
+                )
+                videaUrls.firstOrNull()
             }
             
             // MAIL.RU
@@ -326,10 +355,6 @@ class AnimeSlayer : MainAPI() {
             // Dailymotion
             serverType.contains("dailymotion") || serverType.contains("dm") -> 
                 "https://www.dailymotion.com/embed/video/$dataValue"
-            
-            // 4shared
-            serverType.contains("4shared") -> 
-                "https://www.4shared.com/video/$dataValue"
             
             // ASNWISH
             serverType.contains("asnwish") -> 
