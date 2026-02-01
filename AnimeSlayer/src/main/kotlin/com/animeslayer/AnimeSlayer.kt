@@ -267,11 +267,11 @@ class AnimeSlayer : MainAPI() {
                             if (extractedUrl != null) {
                                 // Convert quality string to Int
                                 val quality = when (qualityStr) {
-                                    "FHD" -> 1080
-                                    "HD" -> 720
-                                    "SD" -> 480
-                                    "LD" -> 360
-                                    else -> 720
+                                    "FHD" -> Qualities.FullHDP.value
+                                    "HD" -> Qualities.HDP.value
+                                    "SD" -> Qualities.SD.value
+                                    "LD" -> Qualities.LD.value
+                                    else -> Qualities.HDP.value
                                 }
                                 
                                 // Get server name for label
@@ -295,10 +295,10 @@ class AnimeSlayer : MainAPI() {
                     if (!href.isNullOrBlank()) {
                         // Determine quality from class
                         val quality = when {
-                            linkElement.parent()?.hasClass("FHD") == true -> 1080
-                            linkElement.parent()?.hasClass("HD") == true -> 720
-                            linkElement.parent()?.hasClass("SD") == true -> 480
-                            else -> 720
+                            linkElement.parent()?.hasClass("FHD") == true -> Qualities.FullHDP.value
+                            linkElement.parent()?.hasClass("HD") == true -> Qualities.HDP.value
+                            linkElement.parent()?.hasClass("SD") == true -> Qualities.SD.value
+                            else -> Qualities.HDP.value
                         }
                         
                         // Get server name from link text
@@ -306,41 +306,20 @@ class AnimeSlayer : MainAPI() {
                         
                         // Direct URL - no need for extractor for Mega and Drive
                         when {
-                            href.contains("mega.nz") -> {
-                                // Mega.nz direct link
+                            href.contains("mega.nz") || href.contains("drive.google.com") || href.contains("4shared.com") -> {
+                                // For direct download links, we can create a simple ExtractorLink
                                 callback.invoke(
                                     newExtractorLink(
-                                        href,
+                                        name,
                                         serverName,
-                                        "$mainUrl/",
-                                        quality,
-                                        false
+                                        href,
+                                        ExtractorLinkType.DIRECT
                                     ) {
-                                        this.name = this@AnimeSlayer.name
+                                        this.quality = quality
+                                        this.referer = "$mainUrl/"
                                     }
                                 )
                                 foundLinks = true
-                            }
-                            href.contains("drive.google.com") -> {
-                                // Google Drive direct link
-                                callback.invoke(
-                                    newExtractorLink(
-                                        href,
-                                        serverName,
-                                        "$mainUrl/",
-                                        quality,
-                                        false
-                                    ) {
-                                        this.name = this@AnimeSlayer.name
-                                    }
-                                )
-                                foundLinks = true
-                            }
-                            href.contains("4shared.com") -> {
-                                // 4shared link - might need extractor
-                                if (loadExtractor(href, "$mainUrl/", subtitleCallback, callback)) {
-                                    foundLinks = true
-                                }
                             }
                             else -> {
                                 // Try with extractor for other links
