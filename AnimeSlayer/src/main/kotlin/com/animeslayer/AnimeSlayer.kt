@@ -156,11 +156,14 @@ class AnimeSlayer : MainAPI() {
                 allServers.addAll(extractServersFromDocument(noscriptDoc, episode))
             }
             
-            // 2. Extract from regular page
+            // 2. Extract from regular page - IMPORTANT: Try multiple extraction methods
             allServers.addAll(extractServersFromDocument(doc, episode))
             
-            // 3. Extract from download links section
-            val downloadLinks = doc.select(".linkul li a, .download-links a, a[href*='drive.google.com'], a[href*='mega.nz'], a[href*='4shared.com'], a[href*='vanfem']")
+            // 3. Also try direct extraction from server containers
+            allServers.addAll(extractServersDirectly(doc, episode))
+            
+            // 4. Extract from download links section
+            val downloadLinks = doc.select(".linkul li a, .download-links a, a[href*='drive.google.com'], a[href*='mega.nz'], a[href*='4shared.com'], a[href*='vanfem'], a[href*='mp4upload']")
             downloadLinks.forEach { linkElement ->
                 val href = linkElement.attr("href")?.trim()
                 if (!href.isNullOrBlank()) {
@@ -169,6 +172,7 @@ class AnimeSlayer : MainAPI() {
                         href.contains("mega.nz") -> "mega"
                         href.contains("4shared.com") -> "4shared"
                         href.contains("vanfem") -> "vanfem"
+                        href.contains("mp4upload") -> "mp4upload"
                         else -> "direct"
                     }
                     allServers.add((serverType to href))
@@ -223,9 +227,8 @@ class AnimeSlayer : MainAPI() {
                     .server-list li, 
                     .server-item, 
                     li[data], 
-                    .server-btn,
                     li[type],
-                    li[class*="server"]
+                    li[class]
                 """.trimIndent())
                 
                 serverElements.forEach { server ->
@@ -234,14 +237,43 @@ class AnimeSlayer : MainAPI() {
                         ?: server.attr("class")?.lowercase()
                         ?: server.text().lowercase()
                     
-                    // Clean up server type
+                    // Clean up server type - don't remove too much
                     serverType = serverType.replace("videoselect", "")
-                        .replace("server", "")
-                        .replace("btn", "")
-                        .replace("-", "")
-                        .replace("_", "")
-                        .replace(Regex("\\d+"), "") // Remove numbers
                         .trim()
+                    
+                    // Extract just the main server type from class
+                    if (serverType.contains(" ")) {
+                        serverType = serverType.split(" ").firstOrNull() ?: serverType
+                    }
+                    
+                    if (!dataValue.isNullOrBlank() && serverType.isNotBlank()) {
+                        servers.add(serverType to dataValue)
+                    }
+                }
+            }
+        }
+        
+        return servers
+    }
+    
+    // Alternative extraction method for servers
+    private fun extractServersDirectly(doc: org.jsoup.nodes.Document, episode: Int): List<Pair<String, String>> {
+        val servers = mutableListOf<Pair<String, String>>()
+        
+        // Try to find server containers with episode-specific data
+        val serverItems = doc.select("li[data], li[type]")
+        if (serverItems.isNotEmpty()) {
+            // Group by container and get the correct episode
+            val containers = doc.select(".divv11")
+            if (containers.isNotEmpty() && containers.size >= episode) {
+                val container = containers[episode - 1]
+                val items = container.select("li")
+                
+                items.forEach { item ->
+                    val dataValue = item.attr("data")?.trim()
+                    val serverType = item.attr("type")?.lowercase() 
+                        ?: item.attr("class")?.lowercase()
+                        ?: item.text().lowercase().replace(Regex("[^a-z]"), "")
                     
                     if (!dataValue.isNullOrBlank() && serverType.isNotBlank()) {
                         servers.add(serverType to dataValue)
@@ -255,50 +287,39 @@ class AnimeSlayer : MainAPI() {
     
     // Smart function to generate URLs from server data
     private fun generateUrlFromServerData(serverType: String, dataValue: String): String? {
+        // Clean server type
+        val cleanType = serverType.lowercase().replace(Regex("[^a-z]"), "")
+        
         return when {
             // Direct URLs already
             dataValue.startsWith("http") -> dataValue
             
-            // VANFEM - NEW SERVER TYPE (from your HTML)
-            serverType.contains("vanfem") -> {
-                // Vanfem appears to use some encoding/obfuscation
-                // Try multiple possible formats based on the pattern
-                val vanfemUrls = listOf(
-                    "https://vanfem.com/v/$dataValue",
-                    "https://vanfem.com/embed/$dataValue",
-                    "https://vanfem.com/e/$dataValue",
-                    "https://www.vanfem.com/v/$dataValue",
-                    "https://www.vanfem.com/embed/$dataValue",
-                    "https://www.vanfem.com/e/$dataValue",
-                    "https://vanfem.net/v/$dataValue",
-                    "https://vanfem.net/embed/$dataValue"
-                )
-                vanfemUrls.firstOrNull()
-            }
-            
-            // MEGA - Based on your HTML examples
-            serverType.contains("mega") -> {
-                // Format: data="fileID#decryptionKey"
-                // Example: data="AmIilJob#0kmvEEog0Ps3f259G07rSi3Dm52XRfC8l0wEdIXa9ps"
+            // MEGA - Check if data looks like MEGA format
+            cleanType.contains("mega") || dataValue.contains("#") && dataValue.length > 20 -> {
                 if (dataValue.contains("#")) {
                     val parts = dataValue.split("#")
                     if (parts.size >= 2) {
                         // MEGA format: https://mega.nz/file/FILEID#DECRYPTIONKEY
-                        "https://mega.nz/file/${parts[0]}#${parts[1]}"
+                        val fileId = parts[0]
+                        val key = parts[1]
+                        "https://mega.nz/file/${fileId}#${key}"
                     } else {
                         "https://mega.nz/file/$dataValue"
                     }
                 } else {
-                    // Fallback formats
-                    "https://mega.nz/file/$dataValue"
+                    // Try different MEGA URL formats
+                    listOf(
+                        "https://mega.nz/file/$dataValue",
+                        "https://mega.nz/#!$dataValue",
+                        "https://mega.nz/folder/$dataValue"
+                    ).firstOrNull()
                 }
             }
             
-            // Google Drive - Based on your HTML examples
-            serverType.contains("drive") || serverType.contains("google") -> {
-                // Format: data="fileID"
-                // Example: data="1NEDOOaVsjtGa003IUQdMeey0Mx0MeMJy"
-                // Google Drive URL formats:
+            // Google Drive - Check if data looks like Drive file ID (33 chars, alphanumeric)
+            cleanType.contains("drive") || cleanType.contains("google") || 
+            (dataValue.length in 28..44 && dataValue.matches(Regex("[a-zA-Z0-9_-]+"))) -> {
+                // Google Drive file IDs are usually 33 characters (like 1NEDOOaVsjtGa003IUQdMeey0Mx0MeMJy)
                 val driveUrls = listOf(
                     "https://drive.google.com/file/d/$dataValue/view",
                     "https://drive.google.com/file/d/$dataValue/preview",
@@ -308,68 +329,76 @@ class AnimeSlayer : MainAPI() {
                 driveUrls.firstOrNull()
             }
             
-            // 4shared - Based on your HTML examples
-            serverType.contains("4shared") -> {
-                // Format: data="shortCode"
-                // Example: data="fcGu1q5viq"
-                // 4shared URL formats:
+            // MP4Upload - Check if data looks like MP4Upload ID (alphanumeric)
+            cleanType.contains("mp4upload") || 
+            (dataValue.length in 8..20 && dataValue.matches(Regex("[a-zA-Z0-9]+"))) -> {
+                "https://mp4upload.com/embed-$dataValue.html"
+            }
+            
+            // VANFEM
+            cleanType.contains("vanfem") -> {
+                val vanfemUrls = listOf(
+                    "https://vanfem.com/v/$dataValue",
+                    "https://vanfem.com/embed/$dataValue",
+                    "https://vanfem.com/e/$dataValue",
+                    "https://www.vanfem.com/v/$dataValue"
+                )
+                vanfemUrls.firstOrNull()
+            }
+            
+            // 4shared
+            cleanType.contains("4shared") || cleanType.contains("shared") -> {
                 val sharedUrls = listOf(
                     "https://www.4shared.com/video/$dataValue",
                     "https://4shared.com/video/$dataValue",
-                    "https://www.4shared.com/get/$dataValue",
-                    "https://4shared.com/get/$dataValue"
+                    "https://www.4shared.com/get/$dataValue"
                 )
                 sharedUrls.firstOrNull()
             }
             
             // YOURUPLOAD
-            serverType.contains("yourupload") -> 
+            cleanType.contains("yourupload") -> 
                 "https://www.yourupload.com/embed/$dataValue"
             
             // OK.ru
-            serverType.contains("ok") -> 
+            cleanType.contains("ok") -> 
                 if (dataValue.matches(Regex("\\d+"))) "https://ok.ru/video/$dataValue" else null
             
             // VIDEA
-            serverType.contains("videa") -> {
+            cleanType.contains("videa") -> {
                 val videaUrls = listOf(
                     "https://videa.hu/player?v=$dataValue",
-                    "https://videa.hu/videok/$dataValue",
-                    "https://videa.hu/v/$dataValue"
+                    "https://videa.hu/videok/$dataValue"
                 )
                 videaUrls.firstOrNull()
             }
             
             // MAIL.RU
-            serverType.contains("mailru") -> 
+            cleanType.contains("mailru") -> 
                 "https://my.mail.ru/video/embed/$dataValue"
             
-            // MP4Upload
-            serverType.contains("mp4upload") -> 
-                "https://mp4upload.com/embed-$dataValue.html"
-            
             // UQLoad
-            serverType.contains("uqload") -> 
+            cleanType.contains("uqload") -> 
                 "https://uqload.com/embed-$dataValue.html"
             
             // Dailymotion
-            serverType.contains("dailymotion") || serverType.contains("dm") -> 
+            cleanType.contains("dailymotion") || cleanType.contains("dm") -> 
                 "https://www.dailymotion.com/embed/video/$dataValue"
             
             // ASNWISH
-            serverType.contains("asnwish") -> 
+            cleanType.contains("asnwish") -> 
                 "https://asnwish.com/e/$dataValue"
             
             // Streamtape
-            serverType.contains("streamtape") -> 
+            cleanType.contains("streamtape") -> 
                 "https://streamtape.com/e/$dataValue"
             
             // StreamSB
-            serverType.contains("streamsb") || serverType.contains("sbplay") -> 
+            cleanType.contains("streamsb") || cleanType.contains("sbplay") -> 
                 "https://streamsb.com/e/$dataValue.html"
             
             // MixDrop
-            serverType.contains("mixdrop") -> 
+            cleanType.contains("mixdrop") -> 
                 "https://mixdrop.co/e/$dataValue"
             
             // Try to detect other common patterns
