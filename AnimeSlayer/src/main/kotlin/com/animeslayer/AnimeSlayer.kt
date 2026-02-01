@@ -208,7 +208,7 @@ class AnimeSlayer : MainAPI() {
                     servers.forEach { server ->
                         val dataValue = server.attr("data")?.trim()
                         val serverType = server.attr("type")?.lowercase() ?: server.attr("class")?.lowercase() ?: ""
-                        val quality = server.attr("quality-data") ?: "HD"
+                        val qualityStr = server.attr("quality-data") ?: "HD"
                         
                         if (!dataValue.isNullOrBlank()) {
                             val extractedUrl = when {
@@ -265,13 +265,13 @@ class AnimeSlayer : MainAPI() {
                             }
                             
                             if (extractedUrl != null) {
-                                // Create quality label
-                                val qualityLabel = when (quality) {
-                                    "FHD" -> "1080p"
-                                    "HD" -> "720p"
-                                    "SD" -> "480p"
-                                    "LD" -> "360p"
-                                    else -> "720p"
+                                // Convert quality string to Int
+                                val quality = when (qualityStr) {
+                                    "FHD" -> 1080
+                                    "HD" -> 720
+                                    "SD" -> 480
+                                    "LD" -> 360
+                                    else -> 720
                                 }
                                 
                                 // Get server name for label
@@ -295,10 +295,10 @@ class AnimeSlayer : MainAPI() {
                     if (!href.isNullOrBlank()) {
                         // Determine quality from class
                         val quality = when {
-                            linkElement.parent()?.hasClass("FHD") == true -> "1080p"
-                            linkElement.parent()?.hasClass("HD") == true -> "720p"
-                            linkElement.parent()?.hasClass("SD") == true -> "480p"
-                            else -> "720p"
+                            linkElement.parent()?.hasClass("FHD") == true -> 1080
+                            linkElement.parent()?.hasClass("HD") == true -> 720
+                            linkElement.parent()?.hasClass("SD") == true -> 480
+                            else -> 720
                         }
                         
                         // Get server name from link text
