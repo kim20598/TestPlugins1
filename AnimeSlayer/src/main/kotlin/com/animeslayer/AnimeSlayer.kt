@@ -13,8 +13,8 @@ class AnimeSlayer : MainAPI() {
     override val supportedTypes = setOf(
         TvType.Anime,
         TvType.AnimeMovie,
-        TvType.OVA,
-        TvType.ONA
+        TvType.OVA
+        // Note: CloudStream3 doesn't have TvType.ONA, use TvType.Anime instead
     )
 
     override val mainPage = mainPageOf(
@@ -38,7 +38,7 @@ class AnimeSlayer : MainAPI() {
             this.selectFirst(".typez.TV") != null -> TvType.Anime
             this.selectFirst(".typez.Movie") != null -> TvType.AnimeMovie
             this.selectFirst(".typez.OVA") != null -> TvType.OVA
-            this.selectFirst(".typez.ONA") != null -> TvType.ONA
+            this.selectFirst(".typez.ONA") != null -> TvType.Anime // ONA treated as regular anime
             else -> TvType.Anime
         }
         
@@ -261,13 +261,13 @@ class AnimeSlayer : MainAPI() {
                             }
                             
                             if (extractedUrl != null) {
-                                // Create quality label
+                                // Create quality label - using string values instead of Qualities enum
                                 val qualityLabel = when (quality) {
-                                    "FHD" -> Qualities.FullHDP.value
-                                    "HD" -> Qualities.HDP.value
-                                    "SD" -> Qualities.SD.value
-                                    "LD" -> Qualities.LD.value
-                                    else -> Qualities.HDP.value
+                                    "FHD" -> "1080p"
+                                    "HD" -> "720p"
+                                    "SD" -> "480p"
+                                    "LD" -> "360p"
+                                    else -> "720p"
                                 }
                                 
                                 // Get server name for label
