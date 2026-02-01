@@ -14,7 +14,6 @@ class AnimeSlayer : MainAPI() {
         TvType.Anime,
         TvType.AnimeMovie,
         TvType.OVA
-        // Note: CloudStream3 doesn't have TvType.ONA, use TvType.Anime instead
     )
 
     override val mainPage = mainPageOf(
@@ -38,7 +37,7 @@ class AnimeSlayer : MainAPI() {
             this.selectFirst(".typez.TV") != null -> TvType.Anime
             this.selectFirst(".typez.Movie") != null -> TvType.AnimeMovie
             this.selectFirst(".typez.OVA") != null -> TvType.OVA
-            this.selectFirst(".typez.ONA") != null -> TvType.Anime // ONA treated as regular anime
+            this.selectFirst(".typez.ONA") != null -> TvType.Anime
             else -> TvType.Anime
         }
         
@@ -190,6 +189,7 @@ class AnimeSlayer : MainAPI() {
             val episode = data.substringAfter("?ep=").toIntOrNull() ?: 1
             
             val doc = app.get(url).document
+            var foundLinks = false
             
             // First try to get links from the noscript element (the actual video links)
             val noscriptElement = doc.selectFirst("noscript#diplayer")
@@ -257,11 +257,15 @@ class AnimeSlayer : MainAPI() {
                                     // ASNWISH links
                                     "https://asnwish.com/e/$dataValue"
                                 }
+                                serverType.contains("drive") -> {
+                                    // Google Drive links
+                                    "https://drive.google.com/file/d/$dataValue/view"
+                                }
                                 else -> null
                             }
                             
                             if (extractedUrl != null) {
-                                // Create quality label - using string values instead of Qualities enum
+                                // Create quality label
                                 val qualityLabel = when (quality) {
                                     "FHD" -> "1080p"
                                     "HD" -> "720p"
@@ -273,8 +277,9 @@ class AnimeSlayer : MainAPI() {
                                 // Get server name for label
                                 val serverName = server.text().trim()
                                 
+                                // Try to load extractor
                                 if (loadExtractor(extractedUrl, "$mainUrl/", subtitleCallback, callback)) {
-                                    return true
+                                    foundLinks = true
                                 }
                             }
                         }
@@ -282,56 +287,125 @@ class AnimeSlayer : MainAPI() {
                 }
             }
             
-            // If not found in noscript, try the regular way (fallback)
-            val serverContainers = doc.select(".divv11")
-            if (serverContainers.isNotEmpty() && serverContainers.size >= episode) {
-                val container = serverContainers[episode - 1]
-                val servers = container.select(".ul-server-position1 li")
-                
-                servers.forEach { server ->
-                    val dataValue = server.attr("data")?.trim()
-                    val serverType = server.attr("type")?.lowercase() ?: server.attr("class")?.lowercase() ?: ""
-                    
-                    if (!dataValue.isNullOrBlank()) {
-                        val extractedUrl = when {
-                            serverType.contains("ok") -> {
-                                if (dataValue.matches(Regex("\\d+"))) {
-                                    "https://ok.ru/video/$dataValue"
-                                } else {
-                                    null
+            // Also check the direct download section (the .linkul section you showed)
+            if (!foundLinks) {
+                val downloadLinks = doc.select(".linkul li a")
+                downloadLinks.forEach { linkElement ->
+                    val href = linkElement.attr("href")?.trim()
+                    if (!href.isNullOrBlank()) {
+                        // Determine quality from class
+                        val quality = when {
+                            linkElement.parent()?.hasClass("FHD") == true -> "1080p"
+                            linkElement.parent()?.hasClass("HD") == true -> "720p"
+                            linkElement.parent()?.hasClass("SD") == true -> "480p"
+                            else -> "720p"
+                        }
+                        
+                        // Get server name from link text
+                        val serverName = linkElement.text().trim()
+                        
+                        // Direct URL - no need for extractor for Mega and Drive
+                        when {
+                            href.contains("mega.nz") -> {
+                                // Mega.nz direct link
+                                callback.invoke(
+                                    ExtractorLink(
+                                        name,
+                                        serverName,
+                                        href,
+                                        "$mainUrl/",
+                                        quality,
+                                        false
+                                    )
+                                )
+                                foundLinks = true
+                            }
+                            href.contains("drive.google.com") -> {
+                                // Google Drive direct link
+                                callback.invoke(
+                                    ExtractorLink(
+                                        name,
+                                        serverName,
+                                        href,
+                                        "$mainUrl/",
+                                        quality,
+                                        false
+                                    )
+                                )
+                                foundLinks = true
+                            }
+                            href.contains("4shared.com") -> {
+                                // 4shared link - might need extractor
+                                if (loadExtractor(href, "$mainUrl/", subtitleCallback, callback)) {
+                                    foundLinks = true
                                 }
                             }
-                            serverType.contains("mega") -> {
-                                if (dataValue.contains("#")) {
-                                    val parts = dataValue.split("#")
-                                    if (parts.size >= 2) {
-                                        "https://mega.nz/file/${parts[0]}#${parts[1]}"
+                            else -> {
+                                // Try with extractor for other links
+                                if (loadExtractor(href, "$mainUrl/", subtitleCallback, callback)) {
+                                    foundLinks = true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // If still no links found, try the regular way (fallback)
+            if (!foundLinks) {
+                val serverContainers = doc.select(".divv11")
+                if (serverContainers.isNotEmpty() && serverContainers.size >= episode) {
+                    val container = serverContainers[episode - 1]
+                    val servers = container.select(".ul-server-position1 li")
+                    
+                    servers.forEach { server ->
+                        val dataValue = server.attr("data")?.trim()
+                        val serverType = server.attr("type")?.lowercase() ?: server.attr("class")?.lowercase() ?: ""
+                        
+                        if (!dataValue.isNullOrBlank()) {
+                            val extractedUrl = when {
+                                serverType.contains("ok") -> {
+                                    if (dataValue.matches(Regex("\\d+"))) {
+                                        "https://ok.ru/video/$dataValue"
+                                    } else {
+                                        null
+                                    }
+                                }
+                                serverType.contains("mega") -> {
+                                    if (dataValue.contains("#")) {
+                                        val parts = dataValue.split("#")
+                                        if (parts.size >= 2) {
+                                            "https://mega.nz/file/${parts[0]}#${parts[1]}"
+                                        } else {
+                                            "https://mega.nz/file/$dataValue"
+                                        }
                                     } else {
                                         "https://mega.nz/file/$dataValue"
                                     }
-                                } else {
-                                    "https://mega.nz/file/$dataValue"
                                 }
+                                serverType.contains("videa") -> {
+                                    "https://videa.hu/videok/$dataValue"
+                                }
+                                serverType.contains("mp4upload") -> {
+                                    "https://mp4upload.com/embed-$dataValue.html"
+                                }
+                                serverType.contains("drive") -> {
+                                    "https://drive.google.com/file/d/$dataValue/view"
+                                }
+                                else -> null
                             }
-                            serverType.contains("videa") -> {
-                                "https://videa.hu/videok/$dataValue"
-                            }
-                            serverType.contains("mp4upload") -> {
-                                "https://mp4upload.com/embed-$dataValue.html"
-                            }
-                            else -> null
-                        }
-                        
-                        if (extractedUrl != null) {
-                            if (loadExtractor(extractedUrl, "$mainUrl/", subtitleCallback, callback)) {
-                                return true
+                            
+                            if (extractedUrl != null) {
+                                if (loadExtractor(extractedUrl, "$mainUrl/", subtitleCallback, callback)) {
+                                    foundLinks = true
+                                }
                             }
                         }
                     }
                 }
             }
             
-            false
+            foundLinks
         } catch (e: Exception) {
             e.printStackTrace()
             false
