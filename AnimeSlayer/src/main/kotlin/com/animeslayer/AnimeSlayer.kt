@@ -20,86 +20,10 @@ class AnimeSlayer : MainAPI() {
         "$mainUrl/anime-slayer-home/" to "الصفحة الرئيسية",
         "$mainUrl/anime/?status=ongoing" to "الأنمي المستمر",
         "$mainUrl/anime/?status=completed&order=rating" to "الأعلى تقييماً",
-        "$mainUrl/anime/?status=completed" to "الأنمي المكتمل"
-    )
-
-    // Genre filter list
-    private val genres = listOf(
-        "أكشن" to "action",
-        "مغامرة" to "adventure",
-        "كوميديا" to "comedy",
-        "دراما" to "drama",
-        "خيال" to "fantasy",
-        "رعب" to "horror",
-        "غموض" to "mystery",
-        "رومانسية" to "romance",
-        "خيال علمي" to "sci-fi",
-        "شريحة من الحياة" to "slice-of-life",
-        "رياضة" to "sports",
-        "خارق للطبيعة" to "supernatural",
-        "نفسي" to "psychological",
-        "ميكا" to "mecha",
-        "موسيقى" to "music",
-        "حرب" to "military",
-        "تاريخي" to "historical",
-        "بوليسي" to "detective",
-        "آيسيكاي" to "isekai",
-        "مدرسة" to "school",
-        "شوجو" to "shoujo",
-        "شونين" to "shounen",
-        "سينين" to "seinen",
-        "جوسيه" to "josei",
-        "هارم" to "harem",
-        "عاكس هارم" to "reverse-harem",
-        "إيتشي" to "ecchi"
-    )
-    
-    // Season filter list
-    private val seasons = listOf(
-        "خريف 2024" to "fall-2024",
-        "ربيع 2024" to "spring-2024",
-        "شتاء 2024" to "winter-2024",
-        "صيف 2023" to "summer-2023",
-        "خريف 2023" to "fall-2023",
-        "ربيع 2023" to "spring-2023",
-        "شتاء 2023" to "winter-2023",
-        "صيف 2022" to "summer-2022",
-        "خريف 2022" to "fall-2022",
-        "ربيع 2022" to "spring-2022",
-        "شتاء 2022" to "winter-2022",
-        "صيف 2021" to "summer-2021",
-        "خريف 2021" to "fall-2021",
-        "ربيع 2021" to "spring-2021",
-        "شتاء 2021" to "winter-2021"
-    )
-    
-    // Status filter list
-    private val statusList = listOf(
-        "مستمر" to "ongoing",
-        "مكتمل" to "completed",
-        "قادم" to "upcoming",
-        "توقف مؤقت" to "hiatus"
-    )
-    
-    // Type filter list
-    private val types = listOf(
-        "مسلسل تلفزيوني" to "tv",
-        "فيلم" to "movie",
-        "OVA" to "ova",
-        "خاص" to "special",
-        "ONA" to "ona",
-        "موسيقى" to "music"
-    )
-    
-    // Order by filter list
-    private val orderList = listOf(
-        "الافتراضي" to "",
-        "أ-ي" to "title",
-        "ي-أ" to "titlereverse",
-        "أحدث تحديث" to "update",
-        "أحدث إضافة" to "latest",
-        "شائع" to "popular",
-        "التقييم" to "rating"
+        "$mainUrl/anime/?status=completed" to "الأنمي المكتمل",
+        "$mainUrl/anime/?sub=arabic&status=&type=&genre=&order=" to "مدبلج للعربية",
+        "$mainUrl/anime/?sub=english&status=&type=&genre=&order=" to "English Dubbed",
+        "$mainUrl/anime/?sub=japanese&status=&type=&genre=&order=" to "Japanese Audio
     )
 
     // Parse anime cards - UPDATED to avoid duplicates
@@ -134,38 +58,14 @@ class AnimeSlayer : MainAPI() {
         }
     }
 
-    // Add filter support using the OLD API (compatible)
-    override suspend fun search(
-        query: String,
+    override suspend fun getMainPage(
         page: Int,
-        filter: Map<String, String>?
-    ): SearchResponseList? {
-        return if (filter != null && filter.isNotEmpty()) {
-            // Handle filtered search
-            val results = handleFilteredSearch(filter, page)
-            SearchResponseList(results, results.isNotEmpty())
-        } else {
-            // Handle regular search
-            val results = if (page == 1) {
-                simpleSearch(query)
-            } else {
-                // For pagination, use the main anime list
-                val doc = app.get("$mainUrl/anime/page/$page/").document
-                extractSearchResults(doc)
-            }
-            SearchResponseList(results, results.isNotEmpty())
-        }
-    }
-    
-    // Simple search function
-    private suspend fun simpleSearch(query: String): List<SearchResponse> {
-        val encoded = URLEncoder.encode(query, "UTF-8")
-        val doc = app.get("$mainUrl/?s=$encoded").document
-        return extractSearchResults(doc)
-    }
-    
-    // Extract search results from document
-    private fun extractSearchResults(doc: org.jsoup.nodes.Document): List<SearchResponse> {
+        request: MainPageRequest
+    ): HomePageResponse {
+        val url = if (page == 1) request.data else "${request.data}page/$page/"
+        val doc = app.get(url).document
+        
+        // FIXED: Only select one type of container to avoid duplicates
         val items = mutableListOf<SearchResponse>()
         val seenUrls = mutableSetOf<String>()
         
@@ -208,80 +108,54 @@ class AnimeSlayer : MainAPI() {
             }
         }
         
-        return items.distinctBy { it.url }
-    }
-    
-    // Handle filtered search with pagination
-    private suspend fun handleFilteredSearch(filter: Map<String, String>, page: Int): List<SearchResponse> {
-        val params = buildFilterParams(filter)
-        
-        // Build URL with filters
-        var url = "$mainUrl/anime/"
-        if (params.isNotEmpty()) {
-            url += "?${params.joinToString("&")}"
-            if (page > 1) {
-                url += "&page=$page"
-            }
-        } else if (page > 1) {
-            url += "page/$page/"
-        }
-        
-        val doc = app.get(url).document
-        return extractSearchResults(doc)
-    }
-    
-    // Build filter parameters from Map
-    private fun buildFilterParams(filter: Map<String, String>): List<String> {
-        val params = mutableListOf<String>()
-        
-        // Genre filter (can have multiple)
-        val genreValues = mutableListOf<String>()
-        genres.forEachIndexed { index, pair ->
-            if (filter.containsKey("genre_${index}")) {
-                genreValues.add(pair.second)
-            }
-        }
-        if (genreValues.isNotEmpty()) {
-            genreValues.forEach { value ->
-                params.add("genre[]=$value")
-            }
-        }
-        
-        // Season filter (can have multiple)
-        val seasonValues = mutableListOf<String>()
-        seasons.forEachIndexed { index, pair ->
-            if (filter.containsKey("season_${index}")) {
-                seasonValues.add(pair.second)
-            }
-        }
-        if (seasonValues.isNotEmpty()) {
-            seasonValues.forEach { value ->
-                params.add("season[]=$value")
-            }
-        }
-        
-        // Other filters (single selection)
-        filter.forEach { (key, value) ->
-            when (key) {
-                "status" -> if (value.isNotBlank()) params.add("status=$value")
-                "type" -> if (value.isNotBlank()) params.add("type=$value")
-                "order" -> if (value.isNotBlank()) params.add("order=$value")
-            }
-        }
-        
-        return params
+        return newHomePageResponse(request.name, items, items.isNotEmpty())
     }
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
-        val url = if (page == 1) request.data else "${request.data}page/$page/"
-        val doc = app.get(url).document
+    override suspend fun search(query: String): List<SearchResponse> {
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        val doc = app.get("$mainUrl/?s=$encoded").document
         
-        val items = extractSearchResults(doc)
+        val items = mutableListOf<SearchResponse>()
+        val seenUrls = mutableSetOf<String>()
         
-        return newHomePageResponse(request.name, items, items.isNotEmpty())
+        // FIXED: Use same logic as getMainPage to avoid duplicates
+        val selectors = listOf(
+            ".listupd article.bs",
+            "article.bs .bsx",
+            ".bsx",
+            ".listupd .bsx",
+            "article.bs"
+        )
+        
+        for (selector in selectors) {
+            val elements = doc.select(selector)
+            if (elements.isNotEmpty()) {
+                elements.forEach { element ->
+                    val result = element.toSearchResult()
+                    if (result != null && !seenUrls.contains(result.url)) {
+                        seenUrls.add(result.url)
+                        items.add(result)
+                    }
+                }
+                if (items.isNotEmpty()) {
+                    break
+                }
+            }
+        }
+        
+        // Fallback for search results
+        if (items.isEmpty()) {
+            val searchResults = doc.select("article, .bsx, .search-result, .post")
+            searchResults.forEach { element ->
+                val result = element.toSearchResult()
+                if (result != null && !seenUrls.contains(result.url)) {
+                    seenUrls.add(result.url)
+                    items.add(result)
+                }
+            }
+        }
+        
+        return items.distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
