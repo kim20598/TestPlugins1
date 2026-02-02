@@ -153,14 +153,14 @@ class AnimeSlayer : MainAPI() {
             if (noscriptElement != null) {
                 val noscriptHtml = noscriptElement.html()
                 val noscriptDoc = org.jsoup.Jsoup.parse(noscriptHtml)
-                allServers.addAll(extractServersFromDocument(noscriptDoc, episode))
+                allServers.addAll(extractAllServers(noscriptDoc, episode))
             }
             
             // 2. Extract from regular page - IMPORTANT: Try multiple extraction methods
-            allServers.addAll(extractServersFromDocument(doc, episode))
+            allServers.addAll(extractAllServers(doc, episode))
             
-            // 3. Also try direct extraction from server containers
-            allServers.addAll(extractServersDirectly(doc, episode))
+            // 3. Also look for servers in specific known positions
+            allServers.addAll(extractServersFromKnownPositions(doc, episode))
             
             // 4. Extract from download links section
             val downloadLinks = doc.select(".linkul li a, .download-links a, a[href*='drive.google.com'], a[href*='mega.nz'], a[href*='4shared.com'], a[href*='vanfem'], a[href*='mp4upload']")
@@ -209,45 +209,56 @@ class AnimeSlayer : MainAPI() {
         }
     }
     
-    // Helper function to extract servers from any document (noscript or regular)
-    private fun extractServersFromDocument(doc: org.jsoup.nodes.Document, episode: Int): List<Pair<String, String>> {
+    // Main function to extract all servers using multiple methods
+    private fun extractAllServers(doc: org.jsoup.nodes.Document, episode: Int): List<Pair<String, String>> {
         val servers = mutableListOf<Pair<String, String>>()
         
-        // Find all server containers - looking for the structure in your HTML
-        val serverContainers = doc.select(".divv11, .server-container, .divv, .serversss")
-        if (serverContainers.isNotEmpty()) {
-            // Get the correct container for the episode
+        // Method 1: Extract from server containers
+        servers.addAll(extractFromServerContainers(doc, episode))
+        
+        // Method 2: Direct extraction of all li elements with data attribute
+        servers.addAll(extractAllDataElements(doc))
+        
+        return servers.distinct()
+    }
+    
+    // Method 1: Extract from server containers
+    private fun extractFromServerContainers(doc: org.jsoup.nodes.Document, episode: Int): List<Pair<String, String>> {
+        val servers = mutableListOf<Pair<String, String>>()
+        
+        // Find all server containers
+        val containers = doc.select(".divv11")
+        if (containers.isNotEmpty()) {
+            // Get the correct container for the episode (episode - 1 for zero-based index)
             val containerIndex = episode - 1
-            if (containerIndex < serverContainers.size) {
-                val container = serverContainers[containerIndex]
+            if (containerIndex < containers.size) {
+                val container = containers[containerIndex]
                 
-                // Look for server lists in multiple possible structures
-                val serverElements = container.select("""
-                    .ul-server-position1 li, 
-                    .server-list li, 
-                    .server-item, 
-                    li[data], 
-                    li[type],
-                    li[class]
-                """.trimIndent())
+                // Extract all li elements from this container
+                val serverItems = container.select("li")
                 
-                serverElements.forEach { server ->
-                    val dataValue = server.attr("data")?.trim()
-                    var serverType = server.attr("type")?.lowercase() 
-                        ?: server.attr("class")?.lowercase()
-                        ?: server.text().lowercase()
+                serverItems.forEach { item ->
+                    val dataValue = item.attr("data")?.trim()
+                    val typeValue = item.attr("type")?.trim()?.lowercase()
+                    val classValue = item.attr("class")?.trim()?.lowercase()
                     
-                    // Clean up server type - don't remove too much
-                    serverType = serverType.replace("videoselect", "")
-                        .trim()
-                    
-                    // Extract just the main server type from class
-                    if (serverType.contains(" ")) {
-                        serverType = serverType.split(" ").firstOrNull() ?: serverType
+                    // Determine server type from multiple sources
+                    val serverType = when {
+                        !typeValue.isNullOrBlank() -> typeValue
+                        !classValue.isNullOrBlank() -> {
+                            // Extract main class name (remove extra classes)
+                            classValue.split(" ").firstOrNull() ?: classValue
+                        }
+                        else -> item.text().trim().lowercase()
                     }
                     
                     if (!dataValue.isNullOrBlank() && serverType.isNotBlank()) {
-                        servers.add(serverType to dataValue)
+                        // Clean server type
+                        val cleanType = serverType.replace("videoselect", "")
+                            .replace("server", "")
+                            .trim()
+                        
+                        servers.add(cleanType to dataValue)
                     }
                 }
             }
@@ -256,27 +267,73 @@ class AnimeSlayer : MainAPI() {
         return servers
     }
     
-    // Alternative extraction method for servers
-    private fun extractServersDirectly(doc: org.jsoup.nodes.Document, episode: Int): List<Pair<String, String>> {
+    // Method 2: Extract all li elements with data attribute
+    private fun extractAllDataElements(doc: org.jsoup.nodes.Document): List<Pair<String, String>> {
         val servers = mutableListOf<Pair<String, String>>()
         
-        // Try to find server containers with episode-specific data
-        val serverItems = doc.select("li[data], li[type]")
-        if (serverItems.isNotEmpty()) {
-            // Group by container and get the correct episode
-            val containers = doc.select(".divv11")
-            if (containers.isNotEmpty() && containers.size >= episode) {
-                val container = containers[episode - 1]
-                val items = container.select("li")
+        // Find ALL li elements that have a data attribute
+        val allDataElements = doc.select("li[data]")
+        
+        allDataElements.forEach { element ->
+            val dataValue = element.attr("data")?.trim()
+            val typeValue = element.attr("type")?.trim()?.lowercase()
+            val classValue = element.attr("class")?.trim()?.lowercase()
+            
+            // Determine server type
+            val serverType = when {
+                !typeValue.isNullOrBlank() -> typeValue
+                !classValue.isNullOrBlank() -> {
+                    // Try to extract meaningful server type from class
+                    val classes = classValue.split(" ")
+                    // Look for server type in classes (mega, drive, vanfem, etc.)
+                    classes.find { it in listOf("mega", "drive", "vanfem", "4shared", "mp4upload", "yourupload", "ok", "videa", "mailru") }
+                        ?: classes.firstOrNull() ?: classValue
+                }
+                else -> element.text().trim().lowercase()
+            }
+            
+            if (!dataValue.isNullOrBlank() && serverType.isNotBlank()) {
+                // Clean server type
+                val cleanType = serverType.replace("videoselect", "")
+                    .replace("server", "")
+                    .trim()
                 
-                items.forEach { item ->
-                    val dataValue = item.attr("data")?.trim()
-                    val serverType = item.attr("type")?.lowercase() 
-                        ?: item.attr("class")?.lowercase()
-                        ?: item.text().lowercase().replace(Regex("[^a-z]"), "")
+                servers.add(cleanType to dataValue)
+            }
+        }
+        
+        return servers
+    }
+    
+    // Method 3: Extract from known positions based on HTML structure
+    private fun extractServersFromKnownPositions(doc: org.jsoup.nodes.Document, episode: Int): List<Pair<String, String>> {
+        val servers = mutableListOf<Pair<String, String>>()
+        
+        // Try to find the specific structure from your HTML
+        val serverLists = doc.select(".ul-server-position1")
+        
+        serverLists.forEachIndexed { listIndex, listElement ->
+            // Check if this is the correct list for the episode
+            // Usually each episode has its own .divv11 container with .ul-server-position1 inside
+            val parentContainer = listElement.parents().firstOrNull { it.hasClass("divv11") }
+            if (parentContainer != null) {
+                // Get index of this container among all .divv11 containers
+                val allContainers = doc.select(".divv11")
+                val containerIndex = allContainers.indexOf(parentContainer)
+                
+                // If this container matches our episode index, extract servers
+                if (containerIndex == episode - 1) {
+                    val serverItems = listElement.select("li")
                     
-                    if (!dataValue.isNullOrBlank() && serverType.isNotBlank()) {
-                        servers.add(serverType to dataValue)
+                    serverItems.forEach { item ->
+                        val dataValue = item.attr("data")?.trim()
+                        val serverType = item.attr("type")?.trim()?.lowercase()
+                            ?: item.attr("class")?.trim()?.lowercase()
+                            ?: item.text().trim().lowercase()
+                        
+                        if (!dataValue.isNullOrBlank() && serverType.isNotBlank()) {
+                            servers.add(serverType to dataValue)
+                        }
                     }
                 }
             }
@@ -287,15 +344,16 @@ class AnimeSlayer : MainAPI() {
     
     // Smart function to generate URLs from server data
     private fun generateUrlFromServerData(serverType: String, dataValue: String): String? {
-        // Clean server type
-        val cleanType = serverType.lowercase().replace(Regex("[^a-z]"), "")
+        // Clean server type for better matching
+        val cleanType = serverType.lowercase()
+            .replace(Regex("[^a-z0-9]"), "") // Remove non-alphanumeric
         
         return when {
             // Direct URLs already
             dataValue.startsWith("http") -> dataValue
             
-            // MEGA - Check if data looks like MEGA format
-            cleanType.contains("mega") || dataValue.contains("#") && dataValue.length > 20 -> {
+            // MEGA - Check for # symbol in data (fileID#decryptionKey)
+            cleanType == "mega" || dataValue.contains("#") -> {
                 if (dataValue.contains("#")) {
                     val parts = dataValue.split("#")
                     if (parts.size >= 2) {
@@ -307,113 +365,75 @@ class AnimeSlayer : MainAPI() {
                         "https://mega.nz/file/$dataValue"
                     }
                 } else {
-                    // Try different MEGA URL formats
-                    listOf(
-                        "https://mega.nz/file/$dataValue",
-                        "https://mega.nz/#!$dataValue",
-                        "https://mega.nz/folder/$dataValue"
-                    ).firstOrNull()
+                    "https://mega.nz/file/$dataValue"
                 }
             }
             
-            // Google Drive - Check if data looks like Drive file ID (33 chars, alphanumeric)
-            cleanType.contains("drive") || cleanType.contains("google") || 
-            (dataValue.length in 28..44 && dataValue.matches(Regex("[a-zA-Z0-9_-]+"))) -> {
-                // Google Drive file IDs are usually 33 characters (like 1NEDOOaVsjtGa003IUQdMeey0Mx0MeMJy)
-                val driveUrls = listOf(
+            // Google Drive - Check if it looks like a Drive file ID
+            cleanType == "drive" || (dataValue.length in 28..44 && dataValue.matches(Regex("[a-zA-Z0-9_-]+"))) -> {
+                // Google Drive URLs
+                listOf(
                     "https://drive.google.com/file/d/$dataValue/view",
                     "https://drive.google.com/file/d/$dataValue/preview",
                     "https://drive.google.com/uc?id=$dataValue&export=download",
                     "https://drive.google.com/uc?id=$dataValue"
-                )
-                driveUrls.firstOrNull()
+                ).firstOrNull()
             }
             
-            // MP4Upload - Check if data looks like MP4Upload ID (alphanumeric)
-            cleanType.contains("mp4upload") || 
-            (dataValue.length in 8..20 && dataValue.matches(Regex("[a-zA-Z0-9]+"))) -> {
+            // MP4Upload
+            cleanType == "mp4upload" -> 
                 "https://mp4upload.com/embed-$dataValue.html"
-            }
             
             // VANFEM
-            cleanType.contains("vanfem") -> {
-                val vanfemUrls = listOf(
-                    "https://vanfem.com/v/$dataValue",
-                    "https://vanfem.com/embed/$dataValue",
-                    "https://vanfem.com/e/$dataValue",
-                    "https://www.vanfem.com/v/$dataValue"
-                )
-                vanfemUrls.firstOrNull()
-            }
+            cleanType == "vanfem" -> 
+                "https://vanfem.com/embed/$dataValue"
             
             // 4shared
-            cleanType.contains("4shared") || cleanType.contains("shared") -> {
-                val sharedUrls = listOf(
-                    "https://www.4shared.com/video/$dataValue",
-                    "https://4shared.com/video/$dataValue",
-                    "https://www.4shared.com/get/$dataValue"
-                )
-                sharedUrls.firstOrNull()
-            }
+            cleanType == "4shared" || cleanType.contains("shared") -> 
+                "https://www.4shared.com/video/$dataValue"
             
             // YOURUPLOAD
             cleanType.contains("yourupload") -> 
                 "https://www.yourupload.com/embed/$dataValue"
             
             // OK.ru
-            cleanType.contains("ok") -> 
+            cleanType == "ok" -> 
                 if (dataValue.matches(Regex("\\d+"))) "https://ok.ru/video/$dataValue" else null
             
             // VIDEA
-            cleanType.contains("videa") -> {
-                val videaUrls = listOf(
-                    "https://videa.hu/player?v=$dataValue",
-                    "https://videa.hu/videok/$dataValue"
-                )
-                videaUrls.firstOrNull()
-            }
+            cleanType == "videa" -> 
+                "https://videa.hu/player?v=$dataValue"
             
             // MAIL.RU
-            cleanType.contains("mailru") -> 
+            cleanType == "mailru" -> 
                 "https://my.mail.ru/video/embed/$dataValue"
             
             // UQLoad
-            cleanType.contains("uqload") -> 
+            cleanType == "uqload" -> 
                 "https://uqload.com/embed-$dataValue.html"
             
             // Dailymotion
-            cleanType.contains("dailymotion") || cleanType.contains("dm") -> 
+            cleanType.contains("dailymotion") || cleanType == "dm" -> 
                 "https://www.dailymotion.com/embed/video/$dataValue"
             
             // ASNWISH
-            cleanType.contains("asnwish") -> 
+            cleanType == "asnwish" -> 
                 "https://asnwish.com/e/$dataValue"
             
             // Streamtape
-            cleanType.contains("streamtape") -> 
+            cleanType == "streamtape" -> 
                 "https://streamtape.com/e/$dataValue"
             
             // StreamSB
-            cleanType.contains("streamsb") || cleanType.contains("sbplay") -> 
+            cleanType.contains("streamsb") || cleanType == "sbplay" -> 
                 "https://streamsb.com/e/$dataValue.html"
             
             // MixDrop
-            cleanType.contains("mixdrop") -> 
+            cleanType == "mixdrop" -> 
                 "https://mixdrop.co/e/$dataValue"
             
-            // Try to detect other common patterns
-            dataValue.length > 10 && dataValue.contains("/") -> 
-                if (dataValue.startsWith("/")) "$mainUrl$dataValue" else dataValue
-            
-            dataValue.contains(".") && !dataValue.contains(" ") -> 
-                "https://$dataValue"
-            
-            // Default case - try as direct URL
-            else -> try {
-                if (dataValue.startsWith("/")) "$mainUrl$dataValue" else dataValue
-            } catch (e: Exception) {
-                null
-            }
+            // Default case
+            else -> null
         }
     }
     
