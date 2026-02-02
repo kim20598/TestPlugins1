@@ -20,22 +20,28 @@ class AnimeSlayer : MainAPI() {
         "$mainUrl/anime-slayer-home/" to "الصفحة الرئيسية",
         "$mainUrl/anime/?status=ongoing" to "الأنمي المستمر",
         "$mainUrl/anime/?status=completed&order=rating" to "الأعلى تقييماً",
-        "$mainUrl/anime/?genre%5B%5D=action" to "الأنمي اكشن",
         "$mainUrl/anime/?status=completed" to "الأنمي المكتمل"
     )
 
-    // Parse anime cards
+    // Parse anime cards - UPDATED to avoid duplicates
     private fun Element.toSearchResult(): SearchResponse? {
-        val href = this.selectFirst("a")?.attr("href") ?: return null
-        val title = this.selectFirst(".tt h2, .tt, h2")?.text()?.trim() 
-            ?: this.selectFirst("img")?.attr("alt")?.trim()
+        // Get the main container (either article.bs or .bsx)
+        val isArticle = this.hasClass("bs")
+        val card = if (isArticle) this.selectFirst(".bsx") ?: this else this
+        
+        val href = card.selectFirst("a")?.attr("href") ?: return null
+        val title = card.selectFirst(".tt h2, .tt, h2")?.text()?.trim() 
+            ?: card.selectFirst("img")?.attr("alt")?.trim()
             ?: return null
-            
-        val poster = this.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
+        
+        // Check if this is a duplicate by checking URL
+        if (href.isBlank()) return null
+        
+        val poster = card.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
         
         // Get type from the div
-        val typeClass = this.selectFirst(".typez")?.text()?.lowercase() 
-            ?: this.selectFirst(".typez")?.attr("class")?.lowercase()
+        val typeClass = card.selectFirst(".typez")?.text()?.lowercase() 
+            ?: card.selectFirst(".typez")?.attr("class")?.lowercase()
         
         val type = when {
             typeClass?.contains("movie") == true -> TvType.AnimeMovie
@@ -56,7 +62,48 @@ class AnimeSlayer : MainAPI() {
         val url = if (page == 1) request.data else "${request.data}page/$page/"
         val doc = app.get(url).document
         
-        val items = doc.select("article.bs, .bsx").mapNotNull { it.toSearchResult() }
+        // FIXED: Only select one type of container to avoid duplicates
+        val items = mutableListOf<SearchResponse>()
+        val seenUrls = mutableSetOf<String>()
+        
+        // Try different container selectors in priority order
+        val selectors = listOf(
+            ".listupd article.bs",  // Primary selector for list pages
+            "article.bs .bsx",      // Nested bsx inside article
+            ".bsx",                 // Direct bsx elements
+            ".listupd .bsx",        // bsx inside listupd
+            "article.bs"            // Fallback to article
+        )
+        
+        // Try each selector until we get items
+        for (selector in selectors) {
+            val elements = doc.select(selector)
+            if (elements.isNotEmpty()) {
+                elements.forEach { element ->
+                    val result = element.toSearchResult()
+                    if (result != null && !seenUrls.contains(result.url)) {
+                        seenUrls.add(result.url)
+                        items.add(result)
+                    }
+                }
+                // If we found items, break (don't try other selectors)
+                if (items.isNotEmpty()) {
+                    break
+                }
+            }
+        }
+        
+        // If still no items, try a broader search
+        if (items.isEmpty()) {
+            val allAnimeElements = doc.select("article, .bsx, .anime-item")
+            allAnimeElements.forEach { element ->
+                val result = element.toSearchResult()
+                if (result != null && !seenUrls.contains(result.url)) {
+                    seenUrls.add(result.url)
+                    items.add(result)
+                }
+            }
+        }
         
         return newHomePageResponse(request.name, items, items.isNotEmpty())
     }
@@ -65,8 +112,47 @@ class AnimeSlayer : MainAPI() {
         val encoded = URLEncoder.encode(query, "UTF-8")
         val doc = app.get("$mainUrl/?s=$encoded").document
         
-        return doc.select("article.bs, .bsx").mapNotNull { it.toSearchResult() }
-            .distinctBy { it.url }
+        val items = mutableListOf<SearchResponse>()
+        val seenUrls = mutableSetOf<String>()
+        
+        // FIXED: Use same logic as getMainPage to avoid duplicates
+        val selectors = listOf(
+            ".listupd article.bs",
+            "article.bs .bsx",
+            ".bsx",
+            ".listupd .bsx",
+            "article.bs"
+        )
+        
+        for (selector in selectors) {
+            val elements = doc.select(selector)
+            if (elements.isNotEmpty()) {
+                elements.forEach { element ->
+                    val result = element.toSearchResult()
+                    if (result != null && !seenUrls.contains(result.url)) {
+                        seenUrls.add(result.url)
+                        items.add(result)
+                    }
+                }
+                if (items.isNotEmpty()) {
+                    break
+                }
+            }
+        }
+        
+        // Fallback for search results
+        if (items.isEmpty()) {
+            val searchResults = doc.select("article, .bsx, .search-result, .post")
+            searchResults.forEach { element ->
+                val result = element.toSearchResult()
+                if (result != null && !seenUrls.contains(result.url)) {
+                    seenUrls.add(result.url)
+                    items.add(result)
+                }
+            }
+        }
+        
+        return items.distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -157,13 +243,10 @@ class AnimeSlayer : MainAPI() {
                 allServers.addAll(extractAllServers(noscriptDoc, episode))
             }
             
-            // 2. Extract from regular page - IMPORTANT: Try multiple extraction methods
+            // 2. Extract from regular page
             allServers.addAll(extractAllServers(doc, episode))
             
-            // 3. Also look for servers in specific known positions
-            allServers.addAll(extractServersFromKnownPositions(doc, episode))
-            
-            // 4. Extract from download links section
+            // 3. Extract from download links section
             val downloadLinks = doc.select(".linkul li a, .download-links a, a[href*='drive.google.com'], a[href*='mega.nz'], a[href*='4shared.com'], a[href*='vanfem'], a[href*='mp4upload']")
             downloadLinks.forEach { linkElement ->
                 val href = linkElement.attr("href")?.trim()
@@ -180,25 +263,13 @@ class AnimeSlayer : MainAPI() {
                 }
             }
             
-            // Debug: Print all found servers
-            println("Found ${allServers.size} servers for episode $episode:")
-            allServers.forEach { (type, value) ->
-                println("  - $type: $value")
-            }
-            
             // Process ALL extracted servers
             allServers.forEach { (serverType, dataValue) ->
                 val extractedUrl = generateUrlFromServerData(serverType, dataValue)
                 if (extractedUrl != null) {
-                    println("Trying server: $serverType with URL: $extractedUrl")
                     if (loadExtractor(extractedUrl, "$mainUrl/", subtitleCallback, callback)) {
                         foundAnyLink = true
-                        println("✓ Successfully loaded extractor for: $serverType")
-                    } else {
-                        println("✗ Failed to load extractor for: $serverType")
                     }
-                } else {
-                    println("⚠ Could not generate URL for: $serverType with data: $dataValue")
                 }
             }
             
@@ -216,9 +287,6 @@ class AnimeSlayer : MainAPI() {
         
         // Method 1: Extract from server containers
         servers.addAll(extractFromServerContainers(doc, episode))
-        
-        // Method 2: Direct extraction of all li elements with data attribute
-        servers.addAll(extractAllDataElements(doc))
         
         return servers.distinct()
     }
@@ -260,81 +328,6 @@ class AnimeSlayer : MainAPI() {
                             .trim()
                         
                         servers.add(cleanType to dataValue)
-                    }
-                }
-            }
-        }
-        
-        return servers
-    }
-    
-    // Method 2: Extract all li elements with data attribute
-    private fun extractAllDataElements(doc: org.jsoup.nodes.Document): List<Pair<String, String>> {
-        val servers = mutableListOf<Pair<String, String>>()
-        
-        // Find ALL li elements that have a data attribute
-        val allDataElements = doc.select("li[data]")
-        
-        allDataElements.forEach { element ->
-            val dataValue = element.attr("data")?.trim()
-            val typeValue = element.attr("type")?.trim()?.lowercase()
-            val classValue = element.attr("class")?.trim()?.lowercase()
-            
-            // Determine server type
-            val serverType = when {
-                !typeValue.isNullOrBlank() -> typeValue
-                !classValue.isNullOrBlank() -> {
-                    // Try to extract meaningful server type from class
-                    val classes = classValue.split(" ")
-                    // Look for server type in classes (mega, drive, vanfem, etc.)
-                    classes.find { it in listOf("mega", "drive", "vanfem", "4shared", "mp4upload", "yourupload", "ok", "videa", "mailru") }
-                        ?: classes.firstOrNull() ?: classValue
-                }
-                else -> element.text().trim().lowercase()
-            }
-            
-            if (!dataValue.isNullOrBlank() && serverType.isNotBlank()) {
-                // Clean server type
-                val cleanType = serverType.replace("videoselect", "")
-                    .replace("server", "")
-                    .trim()
-                
-                servers.add(cleanType to dataValue)
-            }
-        }
-        
-        return servers
-    }
-    
-    // Method 3: Extract from known positions based on HTML structure
-    private fun extractServersFromKnownPositions(doc: org.jsoup.nodes.Document, episode: Int): List<Pair<String, String>> {
-        val servers = mutableListOf<Pair<String, String>>()
-        
-        // Try to find the specific structure from your HTML
-        val serverLists = doc.select(".ul-server-position1")
-        
-        serverLists.forEachIndexed { listIndex, listElement ->
-            // Check if this is the correct list for the episode
-            // Usually each episode has its own .divv11 container with .ul-server-position1 inside
-            val parentContainer = listElement.parents().firstOrNull { it.hasClass("divv11") }
-            if (parentContainer != null) {
-                // Get index of this container among all .divv11 containers
-                val allContainers = doc.select(".divv11")
-                val containerIndex = allContainers.indexOf(parentContainer)
-                
-                // If this container matches our episode index, extract servers
-                if (containerIndex == episode - 1) {
-                    val serverItems = listElement.select("li")
-                    
-                    serverItems.forEach { item ->
-                        val dataValue = item.attr("data")?.trim()
-                        val serverType = item.attr("type")?.trim()?.lowercase()
-                            ?: item.attr("class")?.trim()?.lowercase()
-                            ?: item.text().trim().lowercase()
-                        
-                        if (!dataValue.isNullOrBlank() && serverType.isNotBlank()) {
-                            servers.add(serverType to dataValue)
-                        }
                     }
                 }
             }
@@ -534,4 +527,3 @@ class AnimeSlayer : MainAPI() {
         }.replace(Regex("\\?resize=\\d+,\\d+"), "")
     }
 }
-
