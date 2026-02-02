@@ -20,6 +20,7 @@ class AnimeSlayer : MainAPI() {
         "$mainUrl/anime-slayer-home/" to "الصفحة الرئيسية",
         "$mainUrl/anime/?status=ongoing" to "الأنمي المستمر",
         "$mainUrl/anime/?status=completed&order=rating" to "الأعلى تقييماً",
+        "$mainUrl/anime/?genre%5B%5D=action" to "الأنمي اكشن",
         "$mainUrl/anime/?status=completed" to "الأنمي المكتمل"
     )
 
@@ -533,3 +534,4 @@ class AnimeSlayer : MainAPI() {
         }.replace(Regex("\\?resize=\\d+,\\d+"), "")
     }
 }
+
