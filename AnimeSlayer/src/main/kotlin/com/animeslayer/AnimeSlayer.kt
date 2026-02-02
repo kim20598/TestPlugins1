@@ -20,10 +20,7 @@ class AnimeSlayer : MainAPI() {
         "$mainUrl/anime-slayer-home/" to "الصفحة الرئيسية",
         "$mainUrl/anime/?status=ongoing" to "الأنمي المستمر",
         "$mainUrl/anime/?status=completed&order=rating" to "الأعلى تقييماً",
-        "$mainUrl/anime/?status=completed" to "الأنمي المكتمل",
-        "$mainUrl/anime/?sub=arabic&status=&type=&genre=&order=" to "مدبلج للعربية",
-        "$mainUrl/anime/?sub=english&status=&type=&genre=&order=" to "English Dubbed",
-        "$mainUrl/anime/?sub=japanese&status=&type=&genre=&order=" to "Japanese Audio
+        "$mainUrl/anime/?status=completed" to "الأنمي المكتمل"
     )
 
     // Parse anime cards - UPDATED to avoid duplicates
